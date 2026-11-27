@@ -368,7 +368,7 @@ onBeforeUnmount(() => { skillLoad++; loadId++; tagLoadId++; removeGuard(); windo
         </fieldset>
       </div>
       <div class="editor-feedback"><p v-if="uploading" role="status">{{ saving ? '已安排提交，上传完成后自动保存。' : '文件正在上传，可继续填写作品信息。' }}</p><p v-else-if="saving" role="status">{{ savingDraft ? '正在保存草稿…' : '正在提交并检查内容，请稍候…' }}</p><p v-if="error" class="form-error" role="alert">{{ error }} <button v-if="loadFailed" type="button" class="text-link" @click="loadWork">重新加载作品</button></p></div>
-      <div class="dialog-footer"><span v-if="work?.revisionPending" class="caption-5">本次保存将更新待审核修改。</span><div><button v-if="!work || work.status === 'draft'" type="button" class="button subtle btn" :disabled="loading || saving || loadFailed || Boolean(moderationReason)" @click="save('draft')"><Save :size="16" />存为草稿</button><button class="button primary btn" :disabled="loading || saving || loadFailed || Boolean(moderationReason)"><Upload :size="16" />{{ saving ? '正在保存…' : work ? '保存修改' : '提交审核' }}</button></div></div>
+      <div class="dialog-footer"><span v-if="work?.revisionPending" class="caption-5">本次保存将更新待审核修改。</span><div><button v-if="!work || work.status === 'draft'" type="button" class="button subtle btn" :disabled="loading || saving || loadFailed || Boolean(moderationReason)" @click="save('draft')"><Save :size="16" />存为草稿</button><button class="button primary btn" :disabled="loading || saving || loadFailed || Boolean(moderationReason)"><Upload :size="16" />{{ saving ? '正在保存…' : work ? '保存修改' : isSkill ? '提交技能审核' : '检查并公开' }}</button></div></div>
     </form>
   </dialog>
   <dialog ref="leaveDialog" class="compact-dialog" aria-labelledby="work-discard-heading" @cancel.prevent="finishLeave(false)">

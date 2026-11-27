@@ -171,27 +171,23 @@ watch(dirty, value => { if (value) saved.value = false })
     </form>
     <form v-if="isConfigView && config && !loading" :id="'admin-' + view + '-form'" @submit.prevent="save">
       <fieldset class="fieldset" :disabled="busy">
-        <section class="editor-section"><div class="editor-section-title"><h3>发布与审核</h3><p>新作品按所选模式发布，违规内容可在审核列表中下架。</p></div><div class="editor-fields">
-          <fieldset v-if="view === 'review'" class="publication-modes" aria-describedby="publication-help"><legend>内容发布方式</legend>
-            <label><input v-model="config.communityPublicationMode" type="radio" name="community-publication-mode" value="before" /><span><strong>先审后发</strong><small>新作品进入待审核，通过后才在社区公开。</small></span></label>
-            <label><input v-model="config.communityPublicationMode" type="radio" name="community-publication-mode" value="after" /><span><strong>先发后审</strong><small>{{ config.communityModeration.enabled ? '自动检查通过后公开，需人工复核的内容继续待审。' : '新作品立即公开，并进入审核队列；违规作品可下架。' }}</small></span></label>
-          </fieldset>
-          <label v-else class="field"><span>内容发布方式</span><select v-model="config.communityPublicationMode" class="control" aria-describedby="publication-help"><option value="before">先审核，再公开</option><option value="after">先公开，再审核</option></select></label>
-          <p v-if="view === 'settings'" class="form-note">{{ config.communityPublicationMode === 'after' ? config.communityModeration.enabled ? '自动检查通过后公开，需人工复核的内容继续待审。' : '新投稿直接公开，管理员可在审核列表中处理。' : '新投稿先进入审核队列，通过后公开。' }}</p>
-          <p id="publication-help" class="form-note">保存后仅影响新投稿。已有待审作品仍需逐件处理。</p>
+        <section class="editor-section"><div class="editor-section-title"><h3>发布与审核</h3><p>用户准备发布或发送作品时才初审，正常生成不触发审核。</p></div><div class="editor-fields">
+          <p class="form-note">普通作品初审通过后，提交即公开，不再进入发布后的人工审核队列。修改作品时检查修改内容，通过后立即生效。</p>
+          <p class="form-note">检测未通过或服务暂不可用时禁止发布，生成结果仍保留，可修改或重试。关闭自动审核后普通作品直接公开。</p>
+          <p class="form-note">技能源包仍需管理员确认后才能公开和调用。历史待审记录可在审核列表处理，不会自动批量公开。</p>
         </div></section>
-        <section class="editor-section"><div class="editor-section-title"><h3>自动内容审核</h3><p>在新作品和修改内容公开前检查。</p></div><div class="editor-fields">
+        <section class="editor-section"><div class="editor-section-title"><h3>自动内容审核</h3><p>打开发布或发送窗口时检查作品；提交时校验最终文案及所选参考图。</p></div><div class="editor-fields">
           <label class="switch-row"><span><strong>启用自动内容审核</strong><small>识别色情裸露风险，拦截自定义敏感词。</small></span><input v-model="config.communityModeration.enabled" type="checkbox" role="switch" aria-label="启用自动内容审核" /></label>
           <div class="fields">
-            <label class="field"><span>疑似转人工阈值</span><input v-model.number="config.communityModeration.reviewThreshold" type="number" min="0" max="1" step="any" inputmode="decimal" required class="control" :aria-invalid="!validModerationThresholds" :aria-describedby="validModerationThresholds ? 'moderation-thresholds-help' : 'moderation-thresholds-help moderation-thresholds-error'" /></label>
+            <label class="field"><span>疑似风险拦截阈值</span><input v-model.number="config.communityModeration.reviewThreshold" type="number" min="0" max="1" step="any" inputmode="decimal" required class="control" :aria-invalid="!validModerationThresholds" :aria-describedby="validModerationThresholds ? 'moderation-thresholds-help' : 'moderation-thresholds-help moderation-thresholds-error'" /></label>
             <label class="field"><span>拒绝发布阈值</span><input v-model.number="config.communityModeration.rejectThreshold" type="number" min="0" max="1" step="any" inputmode="decimal" required class="control" :aria-invalid="!validModerationThresholds" :aria-describedby="validModerationThresholds ? 'moderation-thresholds-help' : 'moderation-thresholds-help moderation-thresholds-error'" /></label>
           </div>
-          <p id="moderation-thresholds-help" class="form-note">风险分数为 0–1，分数越高风险越高，阈值越低越严格。达到疑似阈值（默认 0.65）转人工，达到拒绝阈值（默认 0.95）阻止发布。低于疑似阈值仍按发布方式处理。</p>
-          <p v-if="!validModerationThresholds" id="moderation-thresholds-error" class="form-error" role="alert">请输入有效数字，满足 0 &lt; 疑似转人工阈值 &lt; 拒绝发布阈值 ≤ 1。</p>
+          <p id="moderation-thresholds-help" class="form-note">风险分数为 0–1，分数越高风险越高，阈值越低越严格。达到疑似阈值（默认 0.65）即暂时阻止发布，达到拒绝阈值（默认 0.95）直接返回高风险提示。低于疑似阈值且文字检查完成才通过。</p>
+          <p v-if="!validModerationThresholds" id="moderation-thresholds-error" class="form-error" role="alert">请输入有效数字，满足 0 &lt; 疑似风险拦截阈值 &lt; 拒绝发布阈值 ≤ 1。</p>
           <label class="field"><span>敏感词（每行一个）</span><textarea v-model="sensitiveWordsText" class="control" rows="6" maxlength="65000" spellcheck="false" :aria-invalid="!validSensitiveWords" :aria-describedby="validSensitiveWords ? 'moderation-words-help' : 'moderation-words-help moderation-words-error'" placeholder="填写需要拦截的词或短语" /></label>
           <p id="moderation-words-help" class="form-note">最多 1000 个，每个 1–64 字。按字面匹配，不区分英文字母大小写和全角半角；不支持正则表达式。留空时不启用词库拦截。</p>
           <p v-if="!validSensitiveWords" id="moderation-words-error" class="form-error" role="alert">请检查敏感词数量和长度，并移除控制字符。</p>
-          <p class="form-note">检查标题、正文、公开提示词、公开生成参数及图片中的文字，成品图与公开参考图一起检测。视频、动图、无法判断或检测服务异常时保留待审核；技能作品仍须管理员审核。</p>
+          <p class="form-note">检查标题、正文、公开提示词、生成参数、文本附件及图片文字，成品图与公开参考图一起检测。图片最多 20 MB，文本最多 2 MB；视频最多 128 MB / 120 秒，视频和动图最多抽取 12 帧，未检查音轨。超出范围、无法判断或服务异常时禁止发布，可重试。</p>
           <p class="form-note">模型可能误判或漏检。自动拦截不会直接累计违规次数或封禁账号，已公开作品不会因保存设置被追溯处理。</p>
         </div></section>
         <section class="editor-section"><div class="editor-section-title"><h3>账号封禁规则</h3><p>作品与评论的已确认违规合并累计。</p></div><div class="editor-fields">

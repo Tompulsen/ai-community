@@ -93,7 +93,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   app.addHook('onRequest', async (request, reply) => {
     let url: URL
     try { url = new URL(request.raw.url || '/', origin) } catch { throw httpError(400, '地址格式无效。') }
-    if (url.pathname !== '/healthz') requireSameOrigin(request.raw, origin, url.pathname === '/api/uploads' && request.method === 'POST')
+    if (url.pathname !== '/healthz') requireSameOrigin(request.raw, origin, ['/api/uploads', '/api/works/precheck'].includes(url.pathname) && request.method === 'POST')
     if (url.pathname === '/api/documents/upload' && request.method === 'POST') {
       if (documentUploads >= 2) throw httpError(429, '文档上传繁忙，请稍后重试。')
       documentUploads++
@@ -135,7 +135,8 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     if (reply.raw.headersSent) { if (!reply.raw.writableEnded) reply.raw.destroy(); return }
     if (status === 429 && Number.isSafeInteger(failure.retryAfter) && Number(failure.retryAfter) > 0)
       reply.header('Retry-After', String(failure.retryAfter))
-    const message = status >= 500 ? '服务暂时不可用，请稍后重试。'
+    const moderationUnavailable = status === 503 && failure.code === 'WORK_MODERATION_UNAVAILABLE'
+    const message = status >= 500 && !moderationUnavailable ? '服务暂时不可用，请稍后重试。'
       : failure.code === '23505' ? '记录已经存在，请刷新后重试。'
       : failure.validation || failure.code?.startsWith('FST_ERR_CTP_INVALID_JSON') || failure.code === 'FST_ERR_CTP_EMPTY_JSON_BODY' ? '请求内容格式无效。'
       : status === 413 ? '上传内容过大。' : failure.message
@@ -143,7 +144,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
       .header('Content-Type', 'application/json; charset=utf-8')
       .header('Cache-Control', 'private, no-store')
       .header('X-Content-Type-Options', 'nosniff')
-      .send({ error: { message, code: status >= 500 ? 'INTERNAL_ERROR' : failure.code || undefined,
+      .send({ error: { message, code: status >= 500 && !moderationUnavailable ? 'INTERNAL_ERROR' : failure.code || undefined,
         ...(status >= 500 ? { requestId: request.id } : {}) } })
   })
   const register = (handler: ModuleHandler, groups: RouteGroup[]) => {
@@ -154,7 +155,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
         ...(url === '/api/works/feed' ? { bodyLimit: 24576 } : {}),
         ...(url === '/api/images/export' ? { bodyLimit: 44 * 1024 * 1024 } : {}),
         ...(url.startsWith('/api/documents/') ? { bodyLimit: url === '/api/documents/upload' ? 28 * 1024 * 1024 : 610 * 1024 } : {}),
-        ...(!['GET', 'HEAD', 'OPTIONS'].includes(method) && url !== '/api/uploads' ? { schema: { body: objectBody } } : {}),
+        ...(!['GET', 'HEAD', 'OPTIONS'].includes(method) && !['/api/uploads', '/api/works/precheck'].includes(url) ? { schema: { body: objectBody } } : {}),
         handler: async (request, reply) => {
           const ctx = contexts.get(request)
           if (!ctx) throw httpError(500, 'Request context missing')
@@ -216,7 +217,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     [['GET', 'HEAD'], ['/legacy-files/:id', '/files/:key']],
     ['GET', ['/api/works', '/api/community/works', '/api/library', '/api/admin/submissions', '/api/tags', '/api/creators', '/api/announcements',
       '/api/users/:id', '/api/users/:id/followers', '/api/users/:id/following', '/api/uploads/limits', '/api/uploads/:id', '/api/works/:id/comments/:commentId/files']],
-    ['POST', ['/api/uploads', '/api/works', '/api/works/feed', '/api/admin/submissions/:id/review', '/api/works/:id/like', '/api/works/:id/save', '/api/users/:id/follow',
+    ['POST', ['/api/uploads', '/api/works', '/api/works/precheck', '/api/works/feed', '/api/admin/submissions/:id/review', '/api/works/:id/like', '/api/works/:id/save', '/api/users/:id/follow',
       '/api/works/:id/view', '/api/works/:id/repost', '/api/works/:id/report', '/api/reports', '/api/works/:id/comments/:commentId/like']],
     [['GET', 'POST'], ['/api/works/:id/comments']],
     ['DELETE', ['/api/works/:id/comments/:commentId']],

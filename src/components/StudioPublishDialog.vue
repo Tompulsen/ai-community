@@ -5,9 +5,11 @@ import { ChevronDown, Send, SlidersHorizontal, Upload, X } from '@lucide/vue'
 import { api, errorMessage, notify, session } from '../state'
 import type { Work, WorkTag } from '../data'
 import PublicationTagPicker from './PublicationTagPicker.vue'
+import StudioModerationStatus from './StudioModerationStatus.vue'
+import { moderationAllowsPublication } from '../../shared/work-moderation'
 import WorkModerationNotice from './WorkModerationNotice.vue'
 import { refreshLotteryBalance } from '../lottery-balance'
-import { mediaSource, publishCreation, type PublicationDetails, type CreationDestination, type CreationTask } from '../native-studio'
+import { mediaSource, moderateCreation, publishCreation, type PublicationDetails, type CreationDestination, type CreationTask } from '../native-studio'
 import '../publication-controls.css'
 const dialog = ref<HTMLDialogElement>(), extra = ref<HTMLDetailsElement>(), task = ref<CreationTask>(), destination = ref<CreationDestination>('community')
 const title = ref(''), text = ref(''), content = ref<string>(), error = ref(''), busy = ref(false), result = ref<Work>()
@@ -62,6 +64,7 @@ async function open(value: CreationTask, target: CreationDestination = 'communit
   if (extra.value) extra.value.open = false
   dialog.value?.showModal()
   if (previous?.work) await refreshResult(previous.work)
+  else void moderateCreation(value, false, previous?.content ?? currentText ?? value.text)
 }
 async function refreshResult(previous: Work) {
   if (busy.value) return
@@ -128,7 +131,7 @@ async function editPublication() {
 defineExpose({ open })
 </script>
 <template>
-  <Teleport to="body"><dialog ref="dialog" class="compact-dialog studio-publish-dialog" aria-labelledby="studio-publish-title" @cancel="busy && $event.preventDefault()">
+  <Teleport to="body"><dialog ref="dialog" class="compact-dialog studio-publish-dialog" aria-labelledby="studio-publish-title" @cancel="busy && $event.preventDefault()" @close="task = undefined">
     <div class="dialog-heading"><h2 id="studio-publish-title">{{ heading }}</h2><button class="icon-button" aria-label="关闭发布作品" :disabled="busy" @click="dialog?.close()"><X :size="18" /></button></div>
     <form v-if="task" class="dialog-body stack" @submit.prevent="submit" @invalid.capture="revealInvalid">
       <WorkModerationNotice v-if="moderationReason" ref="moderationNotice" :reason="moderationReason">
@@ -136,8 +139,9 @@ defineExpose({ open })
         <button type="button" class="button subtle btn" @click="editPublication">修改发布信息</button>
       </WorkModerationNotice>
       <template v-else>
+      <StudioModerationStatus v-if="!result && !task.publications?.[destination]?.work" :task="task" :content="task.publications?.[destination]?.content ?? content" />
       <div v-if="task.urls.length" class="publish-preview"><template v-for="url in task.urls" :key="url"><video v-if="task.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><img v-else :src="mediaSource(url, true)" :alt="task.prompt" /></template></div>
-      <p v-if="direct" class="form-note">发送到<RouterLink :to="`/work/${task.sourceWorkId}`" @click="dialog?.close()">源作品评论区</RouterLink>，按社区审核设置公开。</p>
+      <p v-if="direct" class="form-note">发送到<RouterLink :to="`/work/${task.sourceWorkId}`" @click="dialog?.close()">源作品评论区</RouterLink>，内容检查通过后，提交即公开。</p>
       <template v-if="!result">
         <label class="field"><span>作品标题</span><input v-model="title" class="control" maxlength="100" required :disabled="busy || locked" placeholder="给作品起一个清晰的名字" /></label>
         <label v-if="direct || category === 'resource'" class="field"><span>{{ direct ? '评论内容' : '资源内容' }}</span><textarea v-model="text" class="control" rows="3" maxlength="2500" :disabled="busy || locked" /></label>
@@ -162,8 +166,8 @@ defineExpose({ open })
           <label class="publish-rights"><input v-model="rights" type="checkbox" :disabled="busy || locked" /><span>我确认拥有作品发布权，并已核实所填写的来源与授权说明。</span></label>
         </template>
         <p v-if="locked && !busy" class="form-note">将使用上次提交的内容重试，避免重复发布。</p>
-        <p v-if="busy" class="form-note" role="status">正在提交并检查内容，请稍候…</p>
-        <button class="button primary btn" :disabled="busy || !title.trim()"><Send v-if="direct" :size="16" /><Upload v-else :size="16" />{{ busy ? '正在提交…' : direct ? '提交评论' : '提交作品' }}</button>
+        <p v-if="busy" class="form-note" role="status">正在校验发布内容并公开，请稍候…</p>
+        <button class="button primary btn" :disabled="busy || !title.trim() || !moderationAllowsPublication(task.moderation)"><Send v-if="direct" :size="16" /><Upload v-else :size="16" />{{ busy ? '正在提交…' : direct ? '发布评论' : '立即公开作品' }}</button>
       </template>
       <div v-else-if="resultUnavailable" class="stack publication-unavailable"><h3>提交记录暂时无法访问</h3><p class="form-note">记录可能已被删除，或当前账号没有查看权限。此提示不代表作品被判定违规。</p><button type="button" class="button primary btn" :disabled="busy" @click="refreshResult(result)">{{ busy ? '正在检查状态…' : '重新检查状态' }}</button></div>
       <div v-else class="stack"><p role="status">{{ resultMessage }}</p><RouterLink :to="resultLink" class="button primary btn" @click="dialog?.close()">{{ sourceCommentLink ? '查看源作品评论' : '查看提交' }}</RouterLink></div>

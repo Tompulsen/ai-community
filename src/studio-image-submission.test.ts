@@ -344,7 +344,8 @@ it('publishes inline image results and references without fetching data URLs und
     files.push(file)
     return { id: `file-${files.length}`, name: file.name, type: file.type, size: file.size, url: `/files/${files.length}` }
   })
-  vi.mocked(api).mockResolvedValue({ work: { id: 'published-inline' } })
+  vi.mocked(api).mockImplementation(async path => path === '/api/works/precheck'
+    ? { state: 'passed', checkedAt: Date.now() } : { work: { id: 'published-inline' } } as any)
   await expect(p.publishCreation(task, 'Inline image', 'community', undefined, undefined, {
     tagIds: ['image-tag'], prompt: task.prompt, sourceUrl: '', license: '', referenceIndices: [0],
   })).resolves.toMatchObject({ work: { id: 'published-inline' } })
@@ -367,6 +368,25 @@ it('rejects malformed inline publication media without falling back to fetch', a
   expect(uploadFile).not.toHaveBeenCalled()
   expect(api).not.toHaveBeenCalled()
 })
+it('cancels a pending publication when the account switches away and back during its check', async () => {
+  const p = await fixture(), { api, uploadFile } = await import('./state'), { nextTick } = await import('vue')
+  const task = await p.submitCreation(p.input)
+  task.kind = 'text'; task.text = 'Safe content'; task.urls = []; task.references = []
+  let finish!: (value: unknown) => void
+  vi.mocked(api).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  const pending = p.publishCreation(task, 'Text', 'community', undefined, undefined, {
+    tagIds: ['resource-tag'], prompt: '', sourceUrl: '', license: '', referenceIndices: [],
+  })
+  const rejected = expect(pending).rejects.toThrow('账号已切换')
+  await vi.waitFor(() => expect(api).toHaveBeenCalledWith('/api/works/precheck', expect.anything()))
+  const original = p.session.user
+  p.session.user = { ...original!, id: 'different-user' }; await nextTick()
+  p.session.user = original; await nextTick()
+  finish({ state: 'passed' })
+  await rejected
+  expect(uploadFile).not.toHaveBeenCalled()
+  expect(vi.mocked(api).mock.calls.every(([path]) => path === '/api/works/precheck')).toBe(true)
+})
 it.each(['auto', 'gemini'] as const)('preserves native Gemini image parameters on publication when selected as %s', async apiFormat => {
   const p = await fixture(), { api, uploadFile } = await import('./state')
   const source = `data:image/png;base64,${btoa('image')}`
@@ -378,7 +398,8 @@ it.each(['auto', 'gemini'] as const)('preserves native Gemini image parameters o
   p.send.mockResolvedValueOnce(Response.json({ status: 'succeeded', apiFormat: 'gemini', protocol: 'sync', outputs: [{ url: source }] }))
   const task = await p.submitCreation(p.input)
   vi.mocked(uploadFile).mockResolvedValue({ id: 'native-file' } as any)
-  vi.mocked(api).mockResolvedValue({ work: { id: 'native-work' } })
+  vi.mocked(api).mockImplementation(async path => path === '/api/works/precheck'
+    ? { state: 'passed', checkedAt: Date.now() } : { work: { id: 'native-work' } } as any)
   await p.publishCreation(task, 'Native image', 'community', undefined, undefined, {
     tagIds: ['image-tag'], prompt: task.prompt, sourceUrl: '', license: '', referenceIndices: [],
   })

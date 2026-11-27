@@ -42,9 +42,11 @@ function fixture(actor = owner, overrides = {}) {
       Object.assign(state.work, { category: args[1], title: args[2], text: args[3], model: args[4], sourceUrl: args[5], license: args[6], fileIds: args[7], tagIds: args[8], generation: args[9], pendingRevision: args[10], status: args[11], approvedNoteId: args[12], version: state.work.version + 1 })
       return { rows: [] }
     }
+    if (s.startsWith('INSERT INTO note')) return { rows: [] }
+    if (s.includes('SET "firstPublishedAt"')) return { rows: [] }
     if (s.startsWith('UPDATE note SET')) return { rows: [] }
     if (s.startsWith('DELETE FROM note')) { state.deletedNotes.push(args[0]); return { rows: [{ userId: 'owner1', replyId: null, renoteId: null }] } }
-    if (s.startsWith('UPDATE "user" SET')) return { rows: [] }
+    if (s.startsWith('UPDATE "user" SET')) return { rows: [{ id: 'owner1' }] }
     if (s.startsWith('DELETE FROM community_submission')) { state.work = null; return { rows: [] } }
     if (s.startsWith('INSERT INTO moderation_log')) {
       if (state.failAudit) throw new Error('audit failed')
@@ -90,8 +92,8 @@ test('author and administrator edits keep authorship, media ownership, review po
     assert.equal(f.result().status, 200)
     assert.equal(f.state.work.authorId, 'owner1'); assert.equal(f.state.work.firstPublishedAt, originalFirst)
     assert.equal(f.state.work.version, 3); assert.equal(f.state.work.approvedNoteId, 'note1')
-    assert.equal(f.state.work.title, mode === 'before' ? '原作品' : '新标题')
-    assert.equal(f.state.work.pendingRevision?.title, mode === 'before' ? '新标题' : undefined)
+    assert.equal(f.state.work.title, '新标题')
+    assert.equal(f.state.work.pendingRevision, null)
     assert(f.statements.filter(s => s.sql.includes('FROM drive_file')).every(s => s.args[1] === 'owner1'))
     assert(!f.statements.some(s => /lottery|firstPublishedAt|INSERT INTO note/.test(s.sql)))
     assert.equal(f.state.audits.length, actor.isAdmin ? 1 : 0)
@@ -106,17 +108,17 @@ test('administrator cannot attach private files of unrelated accounts', async ()
   }
 })
 
-test('administrator can update non-public works without publishing or bypassing pending revisions', async () => {
+test('administrator preserves drafts and immediately publishes checked submissions and revisions', async () => {
   for (const status of ['draft', 'pending', 'rejected']) {
     const f = fixture(admin); Object.assign(f.state.work, { status, approvedNoteId: null, firstPublishedAt: null })
     if (status === 'draft') f.ctx.body.status = 'draft'
     await handleContent(f.ctx)
-    assert.equal(f.state.work.title, '新标题'); assert.equal(f.state.work.status, status === 'draft' ? 'draft' : 'pending')
-    assert.equal(f.state.work.approvedNoteId, null)
+    assert.equal(f.state.work.title, '新标题'); assert.equal(f.state.work.status, status === 'draft' ? 'draft' : 'approved')
+    assert.equal(Boolean(f.state.work.approvedNoteId), status !== 'draft')
   }
   const f = fixture(admin, { mode: 'after' }); f.state.work.pendingRevision = { ...f.state.work, title: '待审核版本' }
   await handleContent(f.ctx)
-  assert.equal(f.state.work.title, '原作品'); assert.equal(f.state.work.pendingRevision.title, '新标题')
+  assert.equal(f.state.work.title, '新标题'); assert.equal(f.state.work.pendingRevision, null)
 })
 
 test('author and administrator deletion preserve media and rewards, and administrator audit is transactional', async () => {

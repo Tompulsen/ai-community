@@ -1,3 +1,4 @@
+import { moderationAllowsPublication, type CreationModeration } from '../shared/work-moderation'
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { SkillReference } from '../shared/community-skills'
 import { reactive, watch } from 'vue'
@@ -62,6 +63,8 @@ export interface CreationTask {
   preview?: string
   poster?: string
   localSave?: { state: 'saving' | 'downloadRequested' | 'failed'; error?: string; requestedAt?: number; completed?: number }
+  moderation?: CreationModeration
+  moderationContent?: string
   browserSave?: { state: 'saving' | 'saved' | 'failed'; error?: string; completed?: number; total?: number }
   galleryHidden?: boolean
   galleryHiddenIndices?: number[]
@@ -1420,6 +1423,78 @@ export async function downloadCreation(task: CreationTask, index = 0, signal?: A
   if (version !== epoch) throw new Error('账号已切换，请重新操作。')
   requestDownload(exported, task, index)
 }
+const moderationChecks = new Map<string, { controller: AbortController; content: string; promise: Promise<CreationModeration> }>()
+export async function moderateCreation(task: CreationTask, retry = false, content = task.text): Promise<CreationModeration> {
+  const unavailable: CreationModeration = { state: 'unavailable', reason: '内容检查暂未完成，请稍后重试。' }
+  if (task.owner !== activeOwner() || task.phase !== 'complete' || task.purpose === 'document') return unavailable
+  const key = `${task.owner}:${task.id}`, version = epoch
+  const identity = task.kind === 'text' ? content : task.id
+  const pending = moderationChecks.get(key)
+  if (pending?.content === identity) return pending.promise
+  if (!retry && task.moderationContent === identity && task.moderation?.state !== 'checking'
+    && task.moderation?.checkedAt && Date.now() - task.moderation.checkedAt < 86400000) return task.moderation
+  pending?.controller.abort()
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 240000)
+  const current = () => version === epoch && task.owner === activeOwner() && moderationChecks.get(key)?.controller === controller
+  task.moderation = { state: 'checking' }; task.moderationContent = identity
+  const promise = (async (): Promise<CreationModeration> => {
+    // Start after the map is populated, including tasks whose bytes already live in IndexedDB.
+    await Promise.resolve()
+    let result = unavailable
+    try {
+      const sources = task.kind === 'text' ? [null] : [...task.urls]
+      if (!sources.length) throw new Error('没有可供检查的生成结果。')
+      for (const url of sources) {
+        controller.signal.throwIfAborted()
+        let blob: Blob | undefined
+        if (url === null) blob = new Blob([content], { type: 'text/markdown' })
+        else {
+          const source = await readableMedia(url!, task.kind)
+          blob = await imageBlob(source)
+          if (!blob) {
+            if (source.startsWith('data:')) throw new Error('作品文件格式无效，请重新获取生成结果。')
+            const response = await fetch(source, { credentials: 'same-origin', signal: controller.signal })
+            if (!response.ok || !response.body) { await response.body?.cancel(); throw new Error('生成文件暂时无法读取，请重新加载后检查。') }
+            const maximum = 128 * 1024 * 1024
+            if (Number(response.headers.get('content-length')) > maximum) {
+              await response.body.cancel(); throw new Error('文件超过 128 MB，暂无法自动检查。')
+            }
+            const reader = response.body.getReader(), chunks: Uint8Array<ArrayBuffer>[] = []
+            let size = 0
+            try {
+              for (;;) {
+                controller.signal.throwIfAborted()
+                const part = await reader.read()
+                if (part.done) break
+                size += part.value.byteLength
+                if (size > maximum) throw new Error('文件超过 128 MB，暂无法自动检查。')
+                chunks.push(new Uint8Array(part.value))
+              }
+            } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
+            blob = new Blob(chunks, { type: response.headers.get('content-type')?.split(';')[0] || '' })
+          }
+        }
+        if (!blob.size || blob.size > 128 * 1024 * 1024) throw new Error('文件为空或超过 128 MB，暂无法自动检查。')
+        if (!current()) return unavailable
+        const body = new FormData()
+        body.set('file', new File([blob], task.kind === 'text' ? 'creation.md' : 'creation', { type: blob.type }))
+        result = await api<CreationModeration>('/api/works/precheck', { method: 'POST', body, signal: controller.signal, expectedAccount: task.owner })
+        if (!['passed', 'disabled', 'rejected', 'unavailable'].includes(result.state)) throw new Error('内容检查返回了无效结果，请重试。')
+        if (!moderationAllowsPublication(result)) break
+      }
+    } catch (cause) {
+      result = { state: 'unavailable', reason: controller.signal.aborted ? '内容检查超时，请重试。' : errorMessage(cause) }
+    } finally { clearTimeout(timer) }
+    if (current()) {
+      task.moderation = { ...result, checkedAt: Date.now() }
+      moderationChecks.delete(key)
+      await persist()
+    }
+    return result
+  })()
+  moderationChecks.set(key, { controller, content: identity, promise })
+  return promise
+}
 const sharing = new Set<string>()
 export async function publishCreation(task: CreationTask, title: string, destination: CreationDestination = 'community', text?: string, content?: string, details?: PublicationDetails) {
   if (task.purpose === 'document') throw new Error('文档制作计划不能发布为社区作品。')
@@ -1431,9 +1506,16 @@ export async function publishCreation(task: CreationTask, title: string, destina
 }
 async function preparePublication(task: CreationTask, title: string, destination: CreationDestination, text?: string, content?: string, details?: PublicationDetails) {
   if (task.owner !== activeOwner() || task.phase !== 'complete') throw new Error('请先完成生成。')
+  const version = epoch
+  const checkOwner = () => { if (version !== epoch || task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。') }
   if (destination === 'source-comment' && (task.kind === 'video' || !task.sourceWorkId || !task.model)) throw new Error('图片或文本同款作品才能发送到源作品评论区。')
   const previous = task.publications?.[destination]
   if (previous?.work) return { work: previous.work }
+  const checked = await moderateCreation(task, false, previous?.content ?? content ?? task.text)
+  checkOwner()
+  if (!moderationAllowsPublication(checked)) throw Object.assign(new Error(checked.reason || '内容检查通过后才能发布。'), {
+    status: checked.state === 'rejected' ? 422 : 503, code: checked.state === 'rejected' ? 'WORK_MODERATION_REJECTED' : 'WORK_MODERATION_UNAVAILABLE',
+  })
   if (!previous && destination === 'community' && !details?.tagIds.length) throw new Error('请至少选择 1 个作品标签后再发布。')
   if (!previous && details && destination === 'community') {
     if (details.tagIds.length > 3 || new Set(details.tagIds).size !== details.tagIds.length) throw new Error('最多选择 3 个作品标签。')
@@ -1445,8 +1527,6 @@ async function preparePublication(task: CreationTask, title: string, destination
     }
     if (new Set(details.referenceIndices).size !== details.referenceIndices.length || details.referenceIndices.some(index => !Number.isInteger(index) || index < 0 || index >= task.references.length)) throw new Error('参考图选择无效，请重新选择。')
   }
-  const version = epoch
-  const checkOwner = () => { if (version !== epoch || task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。') }
   task.publications ??= {}
   const publication = task.publications[destination] ??= {
     ...(details && destination === 'community' ? { details: { ...details, tagIds: [...details.tagIds], referenceIndices: [...details.referenceIndices] } } : {}),
@@ -1503,7 +1583,7 @@ async function preparePublication(task: CreationTask, title: string, destination
     checkOwner()
     // Definitive validation rejections leave no saved work; uncertain requests keep their retry payload.
     const failure = cause as { status?: number; code?: string }
-    if (failure.status === 422 && failure.code === 'WORK_MODERATION_REJECTED' || failure.status === 400 && (!previous && publication.details || destination === 'community' && failure.code === 'WORK_TAGS_REQUIRED')) {
+    if (failure.code?.startsWith('WORK_MODERATION_') || failure.status === 400 && (!previous && publication.details || destination === 'community' && failure.code === 'WORK_TAGS_REQUIRED')) {
       delete task.publications[destination]
       task.publicationReferences = []
       await persist()
@@ -1516,6 +1596,8 @@ async function preparePublication(task: CreationTask, title: string, destination
 watch(() => accountIdentity(), () => {
   const next = activeOwner()
   epoch++
+  for (const check of moderationChecks.values()) check.controller.abort()
+  moderationChecks.clear()
   for (const controller of controllers.values()) controller.abort()
   for (const download of downloads.values()) download.controller.abort()
   for (const save of imageSaves.values()) save.controller.abort()

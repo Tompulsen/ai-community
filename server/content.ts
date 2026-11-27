@@ -26,7 +26,7 @@ import { skillDetailsSchema, skillFileType, skillFileName, type SkillDetails } f
 import { readWorkSkillPackage, validateWorkSkillModel, type SkillModelCatalogue } from './skill-publication.ts';
 import { skillInstructions, type SkillKind, type SkillReference } from '../shared/community-skills.ts';
 import { feedLimits, feedRequestSchema, readFeedWeights, type FeedRequest } from '../shared/recommendation.ts';
-import { prepareWorkModeration, commitWorkModeration } from './work-moderation.ts';
+import { prepareWorkModeration, commitWorkModeration, precheckCreation } from './work-moderation.ts';
 
 const kinds = ['image', 'video', 'resource'] as const;
 type WorkKind = typeof kinds[number];
@@ -431,7 +431,7 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
       if (status === 'pending') conditions.push(scope === 'admin'
         ? `(s.status IN ('pending', 'published') OR s."pendingRevision" IS NOT NULL)`
         : `(s.status = 'pending' OR s."pendingRevision" IS NOT NULL)`);
-      else if (scope === 'admin' && status === 'published') conditions.push(`(s.status = 'published' OR (s.status = 'approved' AND s."approvedNoteId" IS NOT NULL))`);
+      else if (status === 'published') conditions.push(`(s.status = 'published' OR (s.status = 'approved' AND s."approvedNoteId" IS NOT NULL))`);
       else if (scope === 'admin' && status === 'rejected') conditions.push(`s.status IN ('rejected', 'removed')`);
       else if (['draft', 'published', 'approved', 'rejected', 'removed'].includes(status)) conditions.push(`s.status = ${add(status)}`);
       else fail(400, 'Invalid work status');
@@ -866,8 +866,8 @@ async function createWork(ctx: RequestContext, modelCatalogue?: SkillModelCatalo
     }
     if (!draft && destination === 'community' && !revision.tagIds?.length) fail(400, '请至少选择 1 个作品标签后再发布。', 'WORK_TAGS_REQUIRED');
     if (!draft && !moderation) fail(409, '原提交记录已变化，请重新提交作品。', 'WORK_MODERATION_CHANGED');
-    const automatedDecision = moderation ? await commitWorkModeration(ctx, db, moderation) : 'allow';
-    const mode = revision.generation?.skill ? 'before' : (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';
+    const automatedDecision = moderation ? await commitWorkModeration(ctx, db, moderation, Boolean(revision.generation?.skill)) : 'allow';
+    const mode = revision.generation?.skill ? 'before' : 'after';
     const workId = newId(ctx);
     const inserted = await db.query<IdRow>(`INSERT INTO community_submission
       (id,"authorId","idempotencyKey","payloadHash",destination,category,title,text,model,"sourceUrl",license,"fileIds","tagIds",generation,status,"publicationMode","submittedAt",version)
@@ -881,7 +881,7 @@ async function createWork(ctx: RequestContext, modelCatalogue?: SkillModelCatalo
     }
     if (!draft && mode === 'after' && automatedDecision === 'allow') {
       const noteId = await publish(ctx, db, { id: workId, destination, authorId: actor.id }, revision, attachments, publicationPermission, notifications);
-      await db.query('UPDATE community_submission SET status=\'published\',"approvedNoteId"=$2 WHERE id=$1', [workId, noteId]);
+      await db.query('UPDATE community_submission SET status=\'approved\',"approvedNoteId"=$2 WHERE id=$1', [workId, noteId]);
     }
     return workId;
   });
@@ -900,6 +900,7 @@ async function updateWork(ctx: RequestContext, workId: string, modelCatalogue?: 
   const actor = workActor(ctx);
   const body = ctx.body ?? {};
   const version = integer(body.version, 0, 2147483647);
+  const notifications: Parameters<typeof notifyUser>[1][] = [];
   const snapshot = await accessibleWork(ctx, workId);
   if (snapshot.authorId !== actor.id && !actor.isAdmin) fail(403, '只有作者或管理员可以编辑此作品。');
   const snapshotPublished = ['approved', 'published'].includes(snapshot.status) && snapshot.approvedNoteId;
@@ -920,17 +921,19 @@ async function updateWork(ctx: RequestContext, workId: string, modelCatalogue?: 
     const attachments = await validateRevision(ctx, db, row.authorId, revision, body, draft, row.approvedNoteId);
     if (!draft && row.destination === 'community' && !revision.tagIds?.length) fail(400, '请至少选择 1 个作品标签后再发布。', 'WORK_TAGS_REQUIRED');
     if (!draft && !moderation) fail(409, '作品状态已变化，请重新提交审核。', 'WORK_MODERATION_CHANGED');
-    const automatedDecision = moderation ? await commitWorkModeration(ctx, db, moderation) : 'allow';
-    const mode = revision.generation?.skill ? 'before' : (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';
-    if (isPublished && (row.pendingRevision || mode !== 'after' || automatedDecision !== 'allow')) {
+    const automatedDecision = moderation ? await commitWorkModeration(ctx, db, moderation, Boolean(revision.generation?.skill)) : 'allow';
+    const mode = revision.generation?.skill ? 'before' : 'after';
+    if (isPublished && mode === 'before') {
       await db.query('UPDATE community_submission SET "pendingRevision"=$2,version=version+1,"rejectionReason"=NULL WHERE id=$1', [row.id, revision]);
     } else {
-      const noteId = isPublished ? await publish(ctx, db, row, revision, attachments, publicationPermission) : null;
-      await writeRevision(db, row.id, revision, { noteId, status: isPublished ? 'published' : draft ? 'draft' : 'pending' });
+      const immediate = !draft && mode === 'after' && automatedDecision === 'allow';
+      const noteId = immediate ? await publish(ctx, db, row, revision, attachments, publicationPermission, notifications) : null;
+      await writeRevision(db, row.id, revision, { noteId, status: immediate ? 'approved' : draft ? 'draft' : 'pending' });
     }
     if (actor.isAdmin) await db.query('INSERT INTO moderation_log (id,"userId",type,info) VALUES ($1,$2,$3,$4)',
       [newId(ctx), actor.id, 'communityWorkEdit', { submissionId: row.id, userId: row.authorId, version }]);
   });
+  for (const notification of notifications) await inform(ctx, notification);
   return send(ctx, 200, await workResponse(ctx, workId));
 }
 
@@ -1539,6 +1542,7 @@ export async function handleContent(ctx: RequestContext, options: { modelCatalog
     return send(ctx, 200, { items: await packWorks(ctx, rows, undefined, true), nextCursor,
       replaced: !feed.cursor && feed.previous.length > 0 ? rows.some(row => !feed.previous.includes(row.id)) : null });
   }
+  if (path === '/api/works/precheck' && method === 'POST') return precheckCreation(ctx);
   if (path === '/api/works' && method === 'POST') return createWork(ctx, options.modelCatalogue);
   if (path === '/api/library' && method === 'GET') {
     user(ctx);

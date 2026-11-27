@@ -369,11 +369,11 @@ test('approving a public unreviewed work updates its existing note without publi
   await assert.rejects(handleContent(reject.ctx), error => error.statusCode === 409);
 });
 
-test('publication reward hook runs for first public works, not pending, drafts, retries or source comments', async () => {
+test('publication reward hook runs on first immediate publication, not drafts, retries or source comments', async () => {
   for (const mode of ['before', 'after']) for (const status of ['draft', 'pending']) {
     const f = publicationContext({ status, tagIds: ['tag1'] }, { mode });
     await handleContent(f.ctx);
-    assert.equal(f.statements.some(({ sql }) => sql.includes('SET "firstPublishedAt"')), mode === 'after' && status !== 'draft');
+    assert.equal(f.statements.some(({ sql }) => sql.includes('SET "firstPublishedAt"')), status !== 'draft');
   }
   const approval = publicationContext({ version: 2, action: 'approve' }, { path: '/api/admin/submissions/work1/review', admin: true });
   await handleContent(approval.ctx);
@@ -384,6 +384,13 @@ test('publication reward hook runs for first public works, not pending, drafts, 
   const comment = publicationContext({ destination: 'source-comment', resultId: 'result1', model: 'model1', generation: { model: 'model1', prompt: 'Text', sourceWorkId: 'work1' } }, { mode: 'after' });
   await handleContent(comment.ctx);
   assert(!comment.statements.some(({ sql }) => sql.includes('SET "firstPublishedAt"')));
+});
+
+test('my published library includes automatically approved works with public notes', async () => {
+  const queries = [];
+  const ctx = context({ path: '/api/library?status=published', user: { id: 'owner1' }, query: async sql => { queries.push(sql); return { rows: [] }; } });
+  await handleContent(ctx);
+  assert(queries.some(sql => sql.includes("s.status = 'approved' AND s.\"approvedNoteId\" IS NOT NULL")));
 });
 
 test('author suspension while publication waits for the author lock rolls back before awarding', async () => {

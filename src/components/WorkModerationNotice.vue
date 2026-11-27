@@ -11,7 +11,7 @@ defineExpose({ focus: () => notice.value?.focus() })
   <section ref="notice" class="work-moderation-notice" role="alert" tabindex="-1" aria-label="发布被拦截">
     <div class="moderation-heading">
       <span class="moderation-icon"><ShieldX :size="26" aria-hidden="true" /></span>
-      <div><p class="moderation-label">内容审核未通过</p><h3>{{ isEdit ? '修改内容违规，无法发布' : '作品违规，无法发布' }}</h3></div>
+      <div><p class="moderation-label">内容审核未通过</p><h3>{{ isEdit ? '暂不能发布修改' : '暂不能发布作品' }}</h3></div>
     </div>
     <p class="moderation-outcome">{{ isEdit ? '本次修改未发布，原作品保持不变。' : '本次提交已被拦截，作品未公开。' }}</p>
     <div class="moderation-reason"><strong>审核原因</strong><p>{{ reason }}</p></div>

@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import sharp from 'sharp';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { handleContent } from './content.ts';
 import { prepareWorkModeration, commitWorkModeration } from './work-moderation.ts';
 
-const imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aK1cAAAAASUVORK5CYII=', 'base64');
+const imageBytes = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#527183' } }).png().toBuffer();
 const revision = { category: 'image', title: 'A landscape', text: '', model: '', license: '', sourceUrl: '', fileIds: ['image1'], generation: null, tagIds: ['tag1'] };
 const file = { id: 'image1', userId: 'owner1', type: 'image/png', name: 'landscape.png', size: imageBytes.length, md5: 'digest1', accessKey: 'image-key', storedInternal: true, isLink: false, properties: null };
 
@@ -44,13 +45,14 @@ async function fixture(t, options = {}) {
   process.env.COMMUNITY_MODERATION_URL = 'http://moderation.internal:8090'; process.env.COMMUNITY_MODERATION_TOKEN = 'test-internal-secret';
   t.after(() => { oldUrl === undefined ? delete process.env.COMMUNITY_MODERATION_URL : process.env.COMMUNITY_MODERATION_URL = oldUrl; oldToken === undefined ? delete process.env.COMMUNITY_MODERATION_TOKEN : process.env.COMMUNITY_MODERATION_TOKEN = oldToken; });
   t.mock.method(globalThis, 'fetch', async (url, init) => {
+    if (String(url).endsWith('/healthz')) return new Response(JSON.stringify({ ready: true, modelVersion: 'test-v1' }));
     state.calls++;
     assert.equal(state.inTransaction, false, 'model inference must not hold database transaction locks');
     assert.equal(String(url), 'http://moderation.internal:8090/check');
     assert.equal(init.headers.Authorization, 'Bearer test-internal-secret');
     state.sentRejectThreshold = init.headers['X-Moderation-Reject-Threshold'];
     assert.equal(init.redirect, 'error');
-    assert.deepEqual(Buffer.from(init.body), imageBytes);
+    assert.equal((await sharp(Buffer.from(init.body)).metadata()).format, 'png');
     if (options.fetch) return options.fetch(url, init);
     return new Response(JSON.stringify({ nsfwScore: options.score ?? 0.1, text: options.ocr ?? '', modelVersion: 'test-v1' }), { status: 200 });
   });
@@ -59,10 +61,10 @@ async function fixture(t, options = {}) {
 const hasPublicWrite = f => f.statements.some(({ sql }) => /^(INSERT INTO note|UPDATE note SET text)/.test(sql));
 const hasReward = f => f.statements.some(({ sql }) => sql.includes('SET "firstPublishedAt"'));
 
-test('clear image permits the existing after-review publication, while before-review stays pending', async t => {
+test('clear images are immediately approved under either legacy publication setting', async t => {
   for (const mode of ['before', 'after']) await t.test(mode, async t => {
     const f = await fixture(t, { mode }); await handleContent(f.ctx);
-    assert.equal(f.result.status, 201); assert.equal(hasPublicWrite(f), mode === 'after'); assert.equal(hasReward(f), mode === 'after'); assert.equal(f.state.calls, 1);
+    assert.equal(f.result.status, 201); assert.equal(hasPublicWrite(f), true); assert.equal(hasReward(f), true); assert.equal(f.state.calls, 1);
     assert(f.statements.some(({ sql }) => sql.includes('FROM drive_file') && sql.endsWith('FOR SHARE')));
     assert(f.statements.some(({ sql }) => sql.includes('FROM meta') && sql.endsWith('FOR SHARE')));
   });
@@ -77,16 +79,16 @@ test('high-confidence image rejection returns a stable error without submission,
   });
 });
 
-test('borderline, unavailable, malformed, oversized and unsupported responses all retain pending status', async t => {
+test('borderline and unavailable detection prevent publication without creating a pending work', async t => {
   const cases = [
     { score: 0.7 }, { fetch: () => new Response('', { status: 503 }) }, { fetch: () => new Response('', { status: 422 }) },
     { fetch: () => { throw new Error('offline'); } }, { fetch: () => new Response('{"nsfwScore":0}') },
     { fetch: () => new Response('x'.repeat(128 * 1024 + 1)) }, { fetch: () => new Response('{"nsfwScore":2,"text":"","modelVersion":"v1"}') },
   ];
   for (const [i, options] of cases.entries()) await t.test(String(i), async t => {
-    const f = await fixture(t, options); await handleContent(f.ctx);
-    assert.equal(f.result.status, 201); assert(!hasPublicWrite(f)); assert(!hasReward(f));
-    assert.equal(f.statements.find(({ sql }) => sql.startsWith('INSERT INTO community_submission')).parameters[13], 'pending');
+    const f = await fixture(t, options);
+    await assert.rejects(handleContent(f.ctx), error => error.code === (options.score ? 'WORK_MODERATION_REJECTED' : 'WORK_MODERATION_UNAVAILABLE'));
+    assert(!f.statements.some(({ sql }) => sql.startsWith('INSERT'))); assert(!hasPublicWrite(f)); assert(!hasReward(f));
   });
 });
 
@@ -106,9 +108,8 @@ test('skipped OCR below the rejection threshold and malformed skip flags never p
     await t.test(JSON.stringify({ sensitiveWords, ocrSkipped }), async t => {
       const f = await fixture(t, { settings: { enabled: true, sensitiveWords },
         fetch: () => new Response(JSON.stringify({ nsfwScore: 0.1, text: '', modelVersion: 'test-v1', ocrSkipped })) });
-      await handleContent(f.ctx);
-      assert.equal(f.result.status, 201); assert(!hasPublicWrite(f)); assert(!hasReward(f));
-      assert.equal(f.statements.find(({ sql }) => sql.startsWith('INSERT INTO community_submission')).parameters[13], 'pending');
+      await assert.rejects(handleContent(f.ctx), error => error.code === 'WORK_MODERATION_UNAVAILABLE');
+      assert(!f.statements.some(({ sql }) => sql.startsWith('INSERT'))); assert(!hasPublicWrite(f)); assert(!hasReward(f));
     });
   }
 });
@@ -121,7 +122,7 @@ test('completed OCR with an explicit false flag still permits a clear image', as
 test('default and administrator thresholds gate publication at their inclusive boundaries', async t => {
   for (const thresholds of [undefined, { reviewThreshold: 0.3, rejectThreshold: 0.8 }, { reviewThreshold: 0.85, rejectThreshold: 1 }]) {
     const { reviewThreshold, rejectThreshold } = thresholds ?? { reviewThreshold: 0.65, rejectThreshold: 0.95 };
-    for (const [score, decision] of [[reviewThreshold - 0.001, 'allow'], [reviewThreshold, 'review'], [rejectThreshold - 0.001, 'review'], [rejectThreshold, 'reject']]) {
+    for (const [score, decision] of [[reviewThreshold - 0.001, 'allow'], [reviewThreshold, 'reject'], [rejectThreshold - 0.001, 'reject'], [rejectThreshold, 'reject']]) {
       await t.test(`${thresholds ? 'custom' : 'default'} ${reviewThreshold}/${rejectThreshold}: ${score} ${decision}`, async t => {
         const f = await fixture(t, { score, settings: { enabled: true, sensitiveWords: [], ...thresholds } });
         if (decision === 'reject') {
@@ -181,10 +182,10 @@ test('only sanitized public generation parameter string values participate in wo
   assert(hasPublicWrite(ignored)); assert.equal(ignored.state.calls, 0);
 });
 
-test('video, GIF, processing files and oversized files go to review without an inference call', async t => {
-  for (const changes of [{ type: 'video/mp4' }, { type: 'image/gif' }, { properties: { communityMedia: { state: 'pending' } } }, { size: 21 * 1024 * 1024 }, { isLink: true }, { storedInternal: false }]) await t.test(JSON.stringify(changes), async t => {
+test('corrupt videos and processing, oversized or unavailable files cannot publish', async t => {
+  for (const changes of [{ type: 'video/mp4' }, { properties: { communityMedia: { state: 'pending' } } }, { size: 21 * 1024 * 1024 }, { isLink: true }, { storedInternal: false }]) await t.test(JSON.stringify(changes), async t => {
     const f = await fixture(t, { files: [{ ...file, ...changes }], body: { kind: changes.type === 'video/mp4' ? 'video' : 'image' } });
-    await handleContent(f.ctx); assert(!hasPublicWrite(f)); assert.equal(f.state.calls, 0);
+    await assert.rejects(handleContent(f.ctx), e => e.code === 'WORK_MODERATION_UNAVAILABLE'); assert(!hasPublicWrite(f)); assert.equal(f.state.calls, 0);
   });
 });
 
@@ -197,13 +198,13 @@ test('drafts and completed idempotent retries do not trigger inference; disabled
   await t.test('disabled', async t => { const f = await fixture(t, { settings: { enabled: false, sensitiveWords: [] }, score: 0.99 }); await handleContent(f.ctx); assert.equal(f.state.calls, 0); assert(hasPublicWrite(f)); });
 });
 
-test('published edits are blocked or kept as pending revisions without altering the original', async t => {
+test('published edits either apply immediately or leave the original unchanged', async t => {
   for (const score of [0.99, 0.7, 0.1]) await t.test(String(score), async t => {
     const f = await fixture(t, { score, method: 'PATCH', path: '/api/works/work1', body: { version: 2, title: 'Edited landscape' } });
     f.row.status = 'approved'; f.row.approvedNoteId = 'note1';
-    if (score >= 0.95) await assert.rejects(handleContent(f.ctx), error => error.code === 'WORK_MODERATION_REJECTED'); else await handleContent(f.ctx);
+    if (score >= 0.65) await assert.rejects(handleContent(f.ctx), error => error.code === 'WORK_MODERATION_REJECTED'); else await handleContent(f.ctx);
     assert.equal(hasPublicWrite(f), score < 0.65);
-    assert.equal(f.statements.some(({ sql }) => sql.startsWith('UPDATE community_submission SET "pendingRevision"')), score === 0.7);
+    assert.equal(f.statements.some(({ sql }) => sql.startsWith('UPDATE community_submission SET "pendingRevision"')), false);
     assert(!hasReward(f));
   });
 });
@@ -243,19 +244,36 @@ test('source-comment works cannot bypass automatic rejection and human approval 
 
 test('missing service configuration cannot publish an unchecked image', async t => {
   const f = await fixture(t); delete process.env.COMMUNITY_MODERATION_TOKEN;
-  await handleContent(f.ctx); assert(!hasPublicWrite(f)); assert.equal(f.state.calls, 0);
+  await assert.rejects(handleContent(f.ctx), e => e.code === 'WORK_MODERATION_UNAVAILABLE'); assert(!hasPublicWrite(f)); assert.equal(f.state.calls, 0);
 });
 
-test('a detector timeout aborts the request and keeps the work private', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const f = await fixture(t, { fetch: (_url, init) => new Promise((_resolve, reject) => {
-    init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
-    t.mock.timers.tick(12001);
-  }) });
-  await handleContent(f.ctx); assert(!hasPublicWrite(f)); assert(!hasReward(f)); assert.equal(f.state.calls, 1);
+test('a detector timeout keeps the result private and permits a later retry', async t => {
+  const f = await fixture(t, { fetch: () => { throw new DOMException('Timed out', 'TimeoutError'); } });
+  await assert.rejects(handleContent(f.ctx), e => e.code === 'WORK_MODERATION_UNAVAILABLE');
+  assert(!hasPublicWrite(f)); assert(!hasReward(f)); assert.equal(f.state.calls, 1);
 });
 
 test('storage keys cannot cause the detector to read outside the authorized media directory', async t => {
   const f = await fixture(t, { files: [{ ...file, accessKey: '../private-key' }] });
-  await handleContent(f.ctx); assert(!hasPublicWrite(f)); assert.equal(f.state.calls, 0);
+  await assert.rejects(handleContent(f.ctx), e => e.code === 'WORK_MODERATION_UNAVAILABLE'); assert(!hasPublicWrite(f)); assert.equal(f.state.calls, 0);
+});
+
+test('draft and old pending submissions publish once after a successful check', async t => {
+  for (const status of ['draft', 'pending', 'rejected']) await t.test(status, async t => {
+    const f = await fixture(t, { method: 'PATCH', path: '/api/works/work1', body: { version: 2, status: 'pending' } });
+    f.row.status = status;
+    await handleContent(f.ctx);
+    assert(hasPublicWrite(f)); assert(hasReward(f));
+    const saved = f.statements.find(({ sql }) => sql.startsWith('UPDATE community_submission SET category'));
+    assert.equal(saved.parameters[11], 'approved'); assert.equal(saved.parameters[10], null);
+  });
+});
+
+test('full UTF-8 generated text attachments are checked beyond the public excerpt', async t => {
+  const bytes = Buffer.from('safe '.repeat(1000) + 'forbidden');
+  const f = await fixture(t, { files: [{ ...file, type: 'text/markdown', name: 'creation.md', size: bytes.length }],
+    body: { kind: 'resource', body: 'Safe excerpt' }, settings: { enabled: true, sensitiveWords: ['forbidden'] } });
+  await writeFile(join(f.ctx.filesRoot, 'image-key'), bytes);
+  await assert.rejects(handleContent(f.ctx), e => e.code === 'WORK_MODERATION_REJECTED');
+  assert.equal(f.state.calls, 0); assert(!hasPublicWrite(f));
 });
