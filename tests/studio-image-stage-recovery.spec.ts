@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
-async function fixture(page: Page, mode: 'stages' | 'save' | 'unknown') {
+async function fixture(page: Page, mode: 'stages' | 'save' | 'unknown', serverClockOffsetMs = 0) {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
   const image = await readFile('public/assets/brand/octopus-community.jpg')
@@ -11,7 +11,7 @@ async function fixture(page: Page, mode: 'stages' | 'save' | 'unknown') {
   await page.addInitScript(() => localStorage.setItem('octopus:user-17:native-media-settings', JSON.stringify({ autoDownload: false, autoSaveGallery: true })))
   let requestId = '', state: Record<string, unknown> = {}, submit: Route | undefined, submitted: (() => void) | undefined
   function stage(value: 'preparing' | 'queued' | 'generating' | 'saving') {
-    state = { status: 'pending', requestId, tokenId: 41, protocol: 'sync', stage: value, stageStartedAt: Date.now(), outputs: [] }
+    state = { status: 'pending', requestId, tokenId: 41, protocol: 'sync', stage: value, stageStartedAt: Date.now() + serverClockOffsetMs, outputs: [] }
   }
   function finish() { state = { status: 'succeeded', requestId, tokenId: 41, protocol: 'sync', outputs: [{ url: `/api/creation/media?requestId=${requestId}&index=0` }] } }
   await page.route('**/api/creation/**', async route => {
@@ -89,6 +89,47 @@ for (const width of [1440, 390]) {
     await response.getByRole('button', { name: '查询原结果', exact: true }).click()
     await expect(response.getByRole('button', { name: /查看大图：预览生成图片 1/ })).toBeVisible()
     expect(state.requests.some(request => request.path.endsWith('/save'))).toBe(false)
+    await verified(page, state)
+  })
+}
+
+
+for (const [width, offset] of [[1440, 120000], [390, 120000], [1440, -120000]] as const) {
+  test(`elapsed time advances across stages despite server clock offset ${offset} at ${width}px`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 900 })
+    const state = await fixture(page, 'stages', offset)
+    const start = new Date()
+    await page.clock.install({ time: start })
+    await page.clock.pauseAt(new Date(start.getTime() + 1000))
+    const response = await generate(page), timer = response.locator('.task-elapsed')
+    await expect.poll(() => state.requests.filter(request => request.path === '/api/creation/generate').length).toBe(1)
+    await page.clock.runFor(2000)
+    await expect(response).toContainText('准备素材中')
+    await expect(timer).toHaveText('2s')
+    state.stage('generating'); await state.accept()
+    await expect(response).toContainText('正在生成中')
+    await page.clock.runFor(3000)
+    await expect(timer).toHaveText('5s')
+    await page.clock.fastForward(60000)
+    await expect(timer).toHaveText('1m 5s')
+    state.stage('saving')
+    await page.clock.runFor(5000)
+    await expect(response).toContainText('正在保存图片')
+    await expect(timer).toHaveText('1m 10s')
+    await page.screenshot({ path: info.outputPath(`elapsed-${width}-${offset}.png`) })
+    await page.reload()
+    await expect(response).toContainText('正在保存图片')
+    await expect(timer).toHaveText('1m 10s')
+    await page.clock.runFor(5000)
+    await expect(timer).toHaveText('1m 15s')
+    state.finish()
+    await page.clock.runFor(5000)
+    await expect(response).toContainText('生成完成')
+    const completed = await timer.innerText()
+    await page.clock.fastForward(60000)
+    await expect(timer).toHaveText(completed)
+    await page.reload()
+    await expect(timer).toHaveText(completed)
     await verified(page, state)
   })
 }

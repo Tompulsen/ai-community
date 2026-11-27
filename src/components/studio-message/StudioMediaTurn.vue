@@ -123,7 +123,8 @@ const elapsed = computed(() => {
   if (timedOut.value || props.task.phase === 'paused' || props.task.phase === 'attention') return ''
   const end = working.value ? now.value : props.task.settledAt
   if (!Number.isFinite(end)) return ''
-  const seconds = Math.max(0, Math.floor((end! - (props.task.stageStartedAt ?? props.task.createdAt)) / 1000))
+  // Keep total elapsed time on the browser clock; stage timestamps come from the server.
+  const seconds = Math.max(0, Math.floor((end! - props.task.createdAt) / 1000))
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 })
 let timer: ReturnType<typeof setInterval> | undefined
