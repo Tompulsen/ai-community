@@ -1,3 +1,4 @@
+import { combineAbortSignals } from './abort-signals'
 // Adapted from octopus_chat app/utils/video-poster.ts (MIT).
 let activeCaptures = 0
 const waiting: { start: () => void; signal: AbortSignal }[] = []
@@ -96,7 +97,7 @@ async function capturePoster(source: string, signal: AbortSignal): Promise<{ blo
   const url = new URL(source, location.href)
   if (!['http:', 'https:', 'blob:', 'data:'].includes(url.protocol) || url.protocol === 'data:' && !source.startsWith('data:video/')) throw new Error('视频地址无效。')
   const video = document.createElement('video'), deadline = Date.now() + 12000
-  const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(12000)])
+  const combined = combineAbortSignals([signal, AbortSignal.timeout(12000)]), boundedSignal = combined.signal
   video.preload = 'metadata'; video.muted = true; video.playsInline = true; video.crossOrigin = 'anonymous'
   try {
     await waitForFrame(video, () => video.readyState >= 1, boundedSignal, deadline, () => { video.src = url.href; video.load() })
@@ -116,15 +117,17 @@ async function capturePoster(source: string, signal: AbortSignal): Promise<{ blo
   } catch (error) {
     if (!signal.aborted && boundedSignal.aborted) throw new Error('视频封面生成超时，请重试或直接播放原视频。')
     throw error
-  } finally { video.pause(); video.removeAttribute('src'); video.load() }
+  } finally { combined.dispose(); video.pause(); video.removeAttribute('src'); video.load() }
 }
 export async function extractVideoPoster(source: string, signal: AbortSignal): Promise<{ blob: Blob; duration?: number }> {
   const release = await captureSlot(signal)
+  let combined: ReturnType<typeof combineAbortSignals> | undefined
   try {
+    combined = combineAbortSignals([signal, AbortSignal.timeout(35000)])
     const url = new URL(source, location.href)
     return ['http:', 'https:'].includes(url.protocol)
-      ? await remotePoster(url, AbortSignal.any([signal, AbortSignal.timeout(35000)]))
-      : await capturePoster(source, signal)
+      ? await remotePoster(url, combined.signal)
+      : await capturePoster(source, combined.signal)
   }
-  finally { release() }
+  finally { combined?.dispose(); release() }
 }

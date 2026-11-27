@@ -1,5 +1,6 @@
 <!-- Adapted from octopus_chat account-model-pricing.tsx / .module.scss (MIT). -->
 <script setup lang="ts">
+import { combineAbortSignals } from '../abort-signals'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Image, LayoutGrid, MessageSquare, RefreshCw, Search, Video } from '@lucide/vue'
@@ -32,6 +33,7 @@ async function load() {
   if (!owner) { loading.value = false; catalogueLoading.value = false; return }
   const valid = () => current === revision && owner === session.user?.id && accountId === (session.user?.accountId || session.user?.id)
   loading.value = true; catalogueLoading.value = true
+  const combined = combineAbortSignals([controller.signal, AbortSignal.timeout(20000)])
   await Promise.all([
       loadCreationGroups(),
       studioAccount<ModelPricing>('model-pricing', 'GET', undefined, controller.signal).then(result => {
@@ -42,14 +44,14 @@ async function load() {
       }).catch(cause => { if (valid()) error.value = errorMessage(cause) })
         .finally(() => { if (valid()) loading.value = false }),
       api<{ items: CreationModel[] }>('/api/creation/models?scope=all', {
-        expectedAccount: accountId, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]),
+        expectedAccount: accountId, signal: combined.signal,
       }).then(value => {
         if (!valid()) return
         if (!Array.isArray(value.items)) throw new Error('模型分类数据不可用。')
         catalogue.value = value.items
       }).catch(cause => {
         if (valid()) { catalogueError.value = errorMessage(cause); kind.value = 'all' }
-      }).finally(() => { if (valid()) catalogueLoading.value = false }),
+      }).finally(() => { combined.dispose(); if (valid()) catalogueLoading.value = false }),
   ])
 }
 const models = computed(() => {

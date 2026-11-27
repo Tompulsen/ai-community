@@ -8,6 +8,7 @@ import remove from '../../assets/message-actions/clear.svg'
 import pin from '../../assets/message-actions/pin.svg'
 import copy from '../../assets/message-actions/copy.svg'
 import download from '../../assets/message-actions/download.svg'
+import { supportsNativePopover } from '../../studio-popover-fallback'
 
 const icons = { editImage, edit, retry, delete: remove, pin, copy, download }
 export interface MessageAction {
@@ -22,12 +23,13 @@ defineProps<{ label: string; actions: MessageAction[] }>()
 const id = `message-action-${useId()}`
 const tooltip = ref<HTMLElement>(), tip = ref(''), described = ref<string>()
 const portal = ref<string | HTMLElement>('body')
+const nativePopover = supportsNativePopover()
 let anchor: HTMLButtonElement | undefined, hideTimer: ReturnType<typeof setTimeout> | undefined
 let dismissed = false
 function resumeHover() { dismissed = false }
 function close() {
   clearTimeout(hideTimer)
-  tooltip.value?.hidePopover()
+  if (nativePopover) tooltip.value?.hidePopover()
   tip.value = ''; described.value = undefined; anchor = undefined
   window.removeEventListener('scroll', close, true)
   window.removeEventListener('resize', close)
@@ -44,6 +46,7 @@ function escape(event: KeyboardEvent) {
   window.addEventListener('pointermove', resumeHover, { once: true })
 }
 async function show(event: MouseEvent | FocusEvent, action: MessageAction) {
+  if (!nativePopover) return
   const target = event.currentTarget as HTMLButtonElement
   if (event.type === 'pointerenter' && dismissed) return
   if (event.type === 'pointerenter' && (event as PointerEvent).pointerType === 'touch' || event.type === 'focus' && !target.matches(':focus-visible')) return
@@ -82,7 +85,7 @@ onBeforeUnmount(() => { close(); window.removeEventListener('pointermove', resum
 <template>
   <div class="studio-message-actions" role="group" :aria-label="label">
     <button v-for="action in actions" :key="action.icon" type="button" class="message-action" :class="{ 'is-danger': action.icon === 'delete' }"
-      :data-action="action.icon" :aria-label="action.label" :aria-pressed="action.pressed" :aria-disabled="action.disabled || undefined"
+      :data-action="action.icon" :aria-label="action.label" :title="nativePopover ? undefined : action.hint || action.label" :aria-pressed="action.pressed" :aria-disabled="action.disabled || undefined"
       :aria-describedby="described === action.icon ? id : undefined" @pointerenter="show($event, action)" @pointerleave="leave"
       @focus="show($event, action)" @blur="close" @click="activate($event, action)">
       <ImageUp v-if="action.icon === 'publish'" :size="16" :stroke-width="1.8" aria-hidden="true" />

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { combineAbortSignals } from '../abort-signals'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import { ArrowLeft, Bot, Check, Download, Pencil, RotateCcw, Save, Search, X } from '@lucide/vue'
 import { api, errorMessage, notify, session } from '../state'
@@ -83,9 +84,10 @@ async function back() {
 async function pull() {
   pulling.value = true; catalogError.value = ''
   try {
+    const combined = combineAbortSignals([controller.signal, AbortSignal.timeout(20000)])
     const result = await api<{ items: CreationModel[]; groups: CreationGroup[] }>('/api/creation/models?management=1', {
-      expectedAccount: account, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]),
-    })
+      expectedAccount: account, signal: combined.signal,
+    }).finally(combined.dispose)
     if (!current()) return
     if (!Array.isArray(result.items) || !Array.isArray(result.groups)) throw new Error('模型列表返回无效，请重新拉取。')
     const nextGroups = new Map(result.groups.filter(item => item && typeof item.id === 'string'

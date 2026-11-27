@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { combineAbortSignals } from '../abort-signals'
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { ChevronDown } from '@lucide/vue'
 import { formatPoints, parseCommunityWalletLots, type CommunityWallet, type CommunityWalletLots } from '../../shared/studio/community-wallet'
@@ -33,9 +34,10 @@ async function loadDetails(append = false) {
   loading.value = true; error.value = ''
   controller = new AbortController()
   try {
+    const combined = combineAbortSignals([controller.signal, AbortSignal.timeout(15000)])
     const result = await api<{ success: boolean; data: { userId: number } & CommunityWalletLots }>(
       `/api/new-api/wallet/point-lots${cursor ? `?cursor=${cursor}` : ''}`,
-      { expectedAccount: account, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]) })
+      { expectedAccount: account, signal: combined.signal }).finally(combined.dispose)
     if (!active || current !== revision || owner !== identity()) return
     if (result.success !== true || String(result.data?.userId) !== account) throw new Error('账号已变化，请刷新福利明细。')
     const page = parseCommunityWalletLots(result.data)

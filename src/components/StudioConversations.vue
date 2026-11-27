@@ -13,6 +13,7 @@ import StudioContextMenu, { type StudioMenuAction } from './studio-message/Studi
 import { confirmStudioDelete } from '../studio-confirm'
 import StudioChatParameters from './StudioChatParameters.vue'
 import { modelFormat } from '../model-preferences'
+import { supportsNativePopover } from '../studio-popover-fallback'
 
 defineProps<{ unified?: boolean; kind?: StudioKind }>()
 const emit = defineEmits<{ select: [id: string]; reuse: [task: CreationTask] }>()
@@ -101,7 +102,8 @@ function toggleProject(id: string) {
 function escape(event: KeyboardEvent) {
   if (!root.value?.getClientRects().length) return
   const target = event.target instanceof Element ? event.target : null
-  if (target?.closest('dialog[open], [popover]:popover-open') && !target.closest('.studio-conversations')) return
+  if ((target?.closest('dialog[open], .studio-popover-fallback:not([hidden])')
+    || supportsNativePopover() && target?.closest('[popover]:popover-open')) && !target?.closest('.studio-conversations')) return
   if (dialog.value?.open) return
   if (event.key === 'Escape' && creating.value && !pending.value && !createIme.isComposing(event)) {
     event.preventDefault(); event.stopImmediatePropagation(); cancelCreate(); return

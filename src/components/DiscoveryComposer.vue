@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Image, MessageSquare, Video, X } from '@lucide/vue'
 import { errorMessage, session } from '../state'
 import { clearStudioEntry, saveStudioEntry, type StudioEntry } from '../studio-entry'
@@ -9,7 +9,7 @@ import type StudioChat from './StudioChat.vue'
 import '../studio-composer.css'
 
 const StudioAccountTools = defineAsyncComponent(() => import('./StudioAccountTools.vue'))
-const router = useRouter(), kind = ref<'text' | 'image' | 'video'>('image'), mediaKind = ref<'image' | 'video'>('image')
+const router = useRouter(), route = useRoute(), kind = ref<'text' | 'image' | 'video'>('image'), mediaKind = ref<'image' | 'video'>('image')
 const chatComponent = shallowRef<typeof StudioChat>(), chatLoading = ref(false)
 const chat = ref<InstanceType<typeof StudioChat>>()
 const busy = ref(false), error = ref(''), workspace = ref<InstanceType<typeof StudioWorkspace>>()
@@ -41,9 +41,9 @@ async function changeKind(value: 'text' | 'image' | 'video', model?: string) {
   if (target && selectedModel) target.model = selectedModel
   if (value === 'text' && target) pendingTextModel = undefined
 }
-let live = true
-onBeforeUnmount(() => { live = false; accountDialog.value?.close() })
-watch(() => session.user?.id, () => { kindChange++; pendingTextModel = undefined; error.value = ''; accountDialog.value?.close() })
+let live = true, sendRevision = 0
+onBeforeUnmount(() => { live = false; sendRevision++; accountDialog.value?.close() })
+watch(() => session.user?.id, () => { kindChange++; sendRevision++; busy.value = false; pendingTextModel = undefined; error.value = ''; accountDialog.value?.close() })
 async function openAccount(view: 'prices' | 'keys') {
   if (!session.user) { error.value = '请登录后查看模型价格和密钥。'; return }
   accountTool.value = view; accountOpen.value = true
@@ -51,13 +51,19 @@ async function openAccount(view: 'prices' | 'keys') {
 }
 async function send(value: StudioEntry) {
   if (busy.value) return
+  const revision = ++sendRevision, owner = session.user?.id || null, path = route.fullPath
+  const current = () => live && revision === sendRevision && owner === (session.user?.id || null) && route.fullPath === path
+  let id: string | undefined
   busy.value = true; error.value = ''
   try {
-    const id = saveStudioEntry(value)
+    id = await saveStudioEntry(value)
+    if (!current()) { await clearStudioEntry(id, owner); return }
     const failure = await router.push({ path: '/create/' + value.kind, query: { entry: id } })
-    if (failure) { clearStudioEntry(id); if (live) error.value = '未能进入创作台，请重试。' }
-  } catch (cause) { if (live) error.value = errorMessage(cause) }
-  finally { busy.value = false }
+    if (failure) { await clearStudioEntry(id, owner); if (current()) error.value = '未能进入创作台，请重试。' }
+  } catch (cause) {
+    if (id && current()) await clearStudioEntry(id, owner).catch(() => {})
+    if (current()) error.value = errorMessage(cause)
+  } finally { if (revision === sendRevision) busy.value = false }
 }
 </script>
 

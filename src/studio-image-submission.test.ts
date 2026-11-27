@@ -395,6 +395,30 @@ it('keeps a registration failure unsubmitted and excluded from automatic convers
   expect(p.send).not.toHaveBeenCalled()
   expect(p.creation.tasks[0]).toMatchObject({ phase: 'error', conversationPending: true })
 })
+it('submits once when the browser has no AbortSignal.any', async () => {
+  const original = Object.getOwnPropertyDescriptor(AbortSignal, 'any')!
+  Object.defineProperty(AbortSignal, 'any', { configurable: true, value: undefined })
+  try {
+    const p = await fixture()
+    expect(await p.submitCreation(p.input)).toMatchObject({ phase: 'complete' })
+    expect(p.send).toHaveBeenCalledTimes(1)
+  } finally { Object.defineProperty(AbortSignal, 'any', original) }
+})
+it('settles preparation failures before sending and releases the registered controller', async () => {
+  const p = await fixture(), { api } = await import('./state')
+  const registration = vi.spyOn(AbortSignal.prototype, 'addEventListener').mockImplementationOnce(() => { throw new Error('Cannot initialize monitor') })
+  const remove = vi.spyOn(await import('./studio-task-store'), 'deleteTaskRecords').mockResolvedValue()
+  try {
+    const task = await p.submitCreation(p.input)
+    expect(task).toMatchObject({ phase: 'error', errorStage: '生成准备', error: expect.stringContaining('未提交生成') })
+    expect(p.send).not.toHaveBeenCalled()
+    expect(api).not.toHaveBeenCalled()
+    await p.removeCreationTasks([task.id])
+    expect(p.creation.tasks).toHaveLength(0)
+    expect((await p.submitCreation(p.input)).phase).toBe('complete')
+    expect(p.send).toHaveBeenCalledTimes(1)
+  } finally { registration.mockRestore(); remove.mockRestore() }
+})
 it('does not send after the user stops while the initial conversation save is pending', async () => {
   const p = await fixture()
   const task = await p.submitCreation(p.input, current => { p.stopCreation(current) })

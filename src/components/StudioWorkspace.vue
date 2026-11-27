@@ -116,8 +116,10 @@ const canGenerate = computed(() => composerReady.value && !referenceLimitIssue.v
 let live = true, draftRevision = 0, restoreRevision = 0
 let materialSubmission: AbortController | undefined
 function createDraftWrites() {
-  return createDeferredWriteQueue(async ({ key, owner, draft }: { key: string; owner: string; draft: NativeChat['mediaDraft'] }) => {
-    try { localStorage.setItem(key, JSON.stringify(draft)) }
+  return createDeferredWriteQueue(async ({ key, owner, draft, conversationId }: { key: string; owner: string; draft: NativeChat['mediaDraft']; conversationId?: string }) => {
+    // Full references are already persisted with this account's IndexedDB conversation.
+    const checkpoint = conversationId ? { ...draft, references: undefined, referenceConversationId: conversationId } : draft
+    try { localStorage.setItem(key, JSON.stringify(checkpoint)) }
     catch { if (owner === session.user?.id) creation.storageError = '当前草稿无法保存到浏览器，请保留提示词。' }
   }, 200)
 }
@@ -226,7 +228,10 @@ function loadDraft() {
       apiFormat.value = modelApiFormatSchema.safeParse(saved.apiFormat).data ?? legacyApiFormat(model.value)
       if (typeof saved.sourceWorkId === 'string') sourceWorkId.value = saved.sourceWorkId
       if (props.kind === 'image' && typeof saved.imageEditTaskId === 'string') imageEditTaskId.value = saved.imageEditTaskId
-      if (Array.isArray(saved.references)) references.value = saved.references.filter((file: any) => file && typeof file.url === 'string' && typeof file.name === 'string').slice(0, props.kind === 'video' ? 10 : 16)
+      const savedReferences = typeof saved.referenceConversationId === 'string'
+        ? chats.sessions.find(item => item.id === saved.referenceConversationId)?.mediaDrafts?.[props.kind]?.references
+        : saved.references
+      if (Array.isArray(savedReferences)) references.value = savedReferences.filter((file: any) => file && typeof file.url === 'string' && typeof file.name === 'string').slice(0, props.kind === 'video' ? 10 : 16)
     }
   } catch { /* A malformed local draft does not prevent creation. */ }
   chooseModel()
@@ -243,11 +248,11 @@ watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => 
 watch([model, () => videoOptions.mode, videoSetting], () => { if (!creation.modelLaunchPending && !restoringParameters.value) adaptVideoParameters() }, { deep: true, flush: 'sync' })
 watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!creation.modelLaunchPending && !restoringParameters.value) manualSize.value = '' })
 watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, apiFormat, references, sourceWorkId, imageEditTaskId, restoringParameters], () => {
-  if (props.entryOnly || creation.modelLaunchPending || !session.user || restoringParameters.value || !live || props.remixPreparing && !remixApplied.value) return
+  if (props.entryOnly || creation.modelLaunchPending || !session.user || !chats.ready || restoringParameters.value || !live || props.remixPreparing && !remixApplied.value) return
   const draft = { prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value,
     imageOptions: { ...imageOptions }, videoOptions: { ...videoOptions }, protocol: protocol.value, apiFormat: apiFormat.value,
     sourceWorkId: sourceWorkId.value, references: references.value.map(file => ({ ...file })), imageEditTaskId: imageEditTaskId.value }
-  void draftWrites({ key: draftKey(), owner: session.user.id, draft })
+  void draftWrites({ key: draftKey(), owner: session.user.id, draft, conversationId: currentConversation.value?.id })
   if (currentConversation.value) {
     currentConversation.value.mediaDrafts ||= {}
     currentConversation.value.mediaDrafts[props.kind] = draft

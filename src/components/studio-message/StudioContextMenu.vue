@@ -6,13 +6,22 @@ export interface StudioMenuAction { label: string; text?: string; icon: Componen
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref } from 'vue'
 import { errorMessage, notify } from '../../state'
+import { addFallbackPopover, removeFallbackPopover, supportsNativePopover } from '../../studio-popover-fallback'
 const props = defineProps<{ items: StudioMenuAction[]; label?: string }>()
 const panel = ref<HTMLElement>(), visible = ref(false)
 const portalTarget = ref<string | HTMLElement>('body')
 const position = ref({ left: '8px', top: '8px' })
+const nativePopover = supportsNativePopover()
 let origin: HTMLElement | null = null
 let opening = 0
-function close() { opening++; panel.value?.hidePopover() }
+function close() {
+  opening++
+  if (nativePopover) panel.value?.hidePopover()
+  else {
+    if (panel.value) removeFallbackPopover(panel.value)
+    visible.value = false
+  }
+}
 async function open(event: MouseEvent) {
   if ((event.target as Element)?.closest('input, textarea, select, [contenteditable="true"]')) return
   event.preventDefault(); event.stopPropagation()
@@ -21,15 +30,26 @@ async function open(event: MouseEvent) {
   portalTarget.value = origin.closest<HTMLDialogElement>('dialog[open]') || 'body'
   await nextTick()
   if (request !== opening || !origin.isConnected) return
-  panel.value?.showPopover()
+  if (!panel.value) return
+  panel.value.style.visibility = 'hidden'
+  if (nativePopover) panel.value.showPopover()
+  else {
+    addFallbackPopover({ panel: panel.value, trigger: origin, close: (restoreFocus = true) => {
+      close()
+      if (restoreFocus && origin?.isConnected) origin.focus({ preventScroll: true })
+    } })
+    visible.value = true
+  }
   await nextTick()
-  if (request !== opening || !panel.value?.matches(':popover-open')) return
+  if (request !== opening || !panel.value || (nativePopover ? !panel.value.matches(':popover-open') : !visible.value)) return
   const bounds = panel.value.getBoundingClientRect()
   position.value = {
     left: `${Math.max(8, Math.min(event.type === 'click' && event.detail === 0 ? origin.getBoundingClientRect().left : event.clientX, innerWidth - bounds.width - 8))}px`,
     top: `${Math.max(8, Math.min(event.type === 'click' && event.detail === 0 ? origin.getBoundingClientRect().bottom : event.clientY, innerHeight - bounds.height - 8))}px`,
   }
   await nextTick()
+  if (request !== opening || !panel.value?.isConnected) return
+  panel.value.style.removeProperty('visibility')
   panel.value.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
 }
 function keys(event: KeyboardEvent) {
@@ -52,12 +72,13 @@ onBeforeUnmount(close)
 defineExpose({ open, close, visible })
 </script>
 <template>
-  <Teleport :to="portalTarget"><div ref="panel" popover="auto" class="message-context-menu" :style="position" role="menu" :aria-label="label || '消息操作'" @toggle="visible = ($event as ToggleEvent).newState === 'open'" @keydown="keys">
+  <Teleport :to="portalTarget"><div ref="panel" :popover="nativePopover ? 'auto' : undefined" :hidden="!nativePopover && !visible" class="message-context-menu" :class="{ 'studio-popover-fallback': !nativePopover }" :style="position" role="menu" :aria-label="label || '消息操作'" @toggle="nativePopover && (visible = ($event as ToggleEvent).newState === 'open')" @keydown="keys">
     <button v-for="item in props.items" :key="item.label" type="button" role="menuitem" :aria-label="item.label" :disabled="item.disabled" :class="{ danger: item.danger }" @click="select(item)"><component :is="item.icon" :size="16" aria-hidden="true" /><span>{{ item.text || item.label }}</span></button>
   </div></Teleport>
 </template>
 <style scoped>
 .message-context-menu { position: fixed; inset: auto; margin: 0; min-width: 168px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 4px; border: 0; border-radius: 8px; background: var(--popover-surface); color: var(--ink); box-shadow: var(--popover-shadow); overflow-y: auto; }
+.message-context-menu[hidden] { display: none; }
 button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 36px; padding: 8px 12px; border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; font-size: 13px; text-align: start; cursor: pointer; }
 button:hover:not(:disabled), button:focus-visible { background: var(--state-hover); }
 button:active:not(:disabled) { background: var(--state-pressed); }

@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
+import { combineAbortSignals } from '../abort-signals'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { LoaderCircle, WandSparkles } from '@lucide/vue'
 import type { Work } from '../data'
@@ -41,7 +42,8 @@ async function load() {
   if (loading.value || !current()) return
   loading.value = true; issue.value = ''
   try {
-    const result = await api<typeof catalogue.value>('/api/creation/models?scope=all', { expectedAccount: account, signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(20000)]) })
+    const combined = combineAbortSignals([lifetime.signal, AbortSignal.timeout(20000)])
+    const result = await api<typeof catalogue.value>('/api/creation/models?scope=all', { expectedAccount: account, signal: combined.signal }).finally(combined.dispose)
     if (current()) catalogue.value = result
   } catch (cause) { if (current()) issue.value = errorMessage(cause) }
   finally { if (current()) loading.value = false }
@@ -52,8 +54,10 @@ async function start() {
   const selected = { group: group.value, model: model.value, file: file.value }
   const controller = preparation = new AbortController()
   const valid = () => current() && !controller.signal.aborted
-  const signal = AbortSignal.any([controller.signal, lifetime.signal, AbortSignal.timeout(90000)])
+  let combined: ReturnType<typeof combineAbortSignals> | undefined
   try {
+    combined = combineAbortSignals([controller.signal, lifetime.signal, AbortSignal.timeout(90000)])
+    const signal = combined.signal
     const content = await reversePromptContent(selected.file, signal)
     const native = catalogue.value.contractVersion === 2
     const access = await api<{ items: CreationModel[]; tokenId?: number; contractVersion: 1 | 2 }>(`/api/creation/models${native ? `?group=${encodeURIComponent(selected.group)}` : ''}`, {
@@ -71,7 +75,7 @@ async function start() {
       ], stream: true }),
     }, undefined, valid)
   } catch (cause) { if (valid()) issue.value = errorMessage(cause) }
-  finally { if (preparation === controller) { preparing.value = false; preparation = undefined } }
+  finally { combined?.dispose(); if (preparation === controller) { preparing.value = false; preparation = undefined } }
 }
 function stop() { preparation?.abort(); if (task.value) stopCreation(task.value); preparing.value = false }
 async function recover() {

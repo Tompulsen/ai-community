@@ -1,3 +1,4 @@
+import { combineAbortSignals } from './abort-signals'
 import { computed, onBeforeUnmount, shallowRef, unref, watch, type Ref } from 'vue'
 import { createMaterialUpload, type MaterialUploadSnapshot } from '../shared/studio/material-upload'
 import { parseFile, type ParsedFile } from '../shared/studio/file-upload'
@@ -38,7 +39,7 @@ export function useStudioMaterials(files: Ref<StudioFile[]>, identity: Ref<strin
           const audio = ['audio/mpeg', 'audio/wav', 'audio/flac', 'audio/ogg'].includes(file.type)
           if (!video && !audio) throw new Error('请选择图片、MP4 视频或 MP3、WAV、FLAC、OGG 音频。')
           const controller = new AbortController(), owner = session.user?.id
-          const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(180000)])
+          const combined = combineAbortSignals([controller.signal, AbortSignal.timeout(180000)]), signal = combined.signal
           activeUpload = { controller, itemId: snapshot.value.items.find(item => item.status === 'processing')?.id }
           try {
             let uploaded: WorkFile = await uploadFile(file, signal)
@@ -64,7 +65,7 @@ export function useStudioMaterials(files: Ref<StudioFile[]>, identity: Ref<strin
             if (!/^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(uploaded.url)) throw new Error('素材地址无效，请重新上传。')
             const durationSeconds = Number.isFinite(uploaded.durationSeconds) && uploaded.durationSeconds! > 0 ? uploaded.durationSeconds : undefined
             return { name: uploaded.name, type: uploaded.type, size: uploaded.size || file.size, content: uploaded.url, isText: false, referenceId: uploaded.id, duration: durationSeconds, durationSeconds }
-          } finally { if (activeUpload?.controller === controller) activeUpload = undefined }
+          } finally { combined.dispose(); if (activeUpload?.controller === controller) activeUpload = undefined }
         }
         if (options.imagesOnly) throw new Error('请选择 PNG、JPEG、WebP 或 HEIC 图片。')
         return parseFile(file, unref(options.officeWorkspace))

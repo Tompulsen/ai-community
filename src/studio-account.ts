@@ -1,14 +1,18 @@
+import { combineAbortSignals } from './abort-signals'
 import { session } from './state'
 export async function studioAccount<T>(route: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
   if (!/^(?:status|session|model-pricing|wallet(?:\/(?:topup|plans|history|quote|pay|subscription|redeem))?|logs(?:\?[\w=&%+.*-]+)?|tokens(?:\/[1-9]\d*(?:\/select)?)?(?:\?[\w=&-]+)?|groups|auto-groups)$/.test(route)) throw new Error('账号接口无效。')
   const owner = session.user?.id, account = session.user?.accountId || owner
   if (!account) throw new Error('请先登录。')
   const payload = body === undefined && !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase()) ? {} : body
-  const response = await fetch(`/api/new-api/${route}`, { method, credentials: 'same-origin', cache: 'no-store',
-    headers: { 'X-New-Api-User': account, ...(payload !== undefined ? { 'Content-Type': 'application/json' } : {}) },
-    ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(25000)]) : AbortSignal.timeout(25000) })
-  const data = await response.json()
-  if (session.user?.id !== owner || (session.user?.accountId || session.user?.id) !== account) throw new Error('账号已切换，请重新操作。')
-  if (!response.ok || data.success !== true) throw new Error(data.message || '账号服务暂时不可用。')
-  return data.data as T
+  const combined = combineAbortSignals([...(signal ? [signal] : []), AbortSignal.timeout(25000)])
+  try {
+    const response = await fetch(`/api/new-api/${route}`, { method, credentials: 'same-origin', cache: 'no-store',
+      headers: { 'X-New-Api-User': account, ...(payload !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+      ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}), signal: combined.signal })
+    const data = await response.json()
+    if (session.user?.id !== owner || (session.user?.accountId || session.user?.id) !== account) throw new Error('账号已切换，请重新操作。')
+    if (!response.ok || data.success !== true) throw new Error(data.message || '账号服务暂时不可用。')
+    return data.data as T
+  } finally { combined.dispose() }
 }

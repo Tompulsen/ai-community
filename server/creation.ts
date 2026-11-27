@@ -936,6 +936,11 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
       if (!response.ok) {
       const insufficient = isInsufficientCredits(data)
       const detail = record(data) && record(data.error) ? data.error.message : record(data) ? data.message : undefined
+      const missingSupplier = response.status === 404 && record(data) && record(data.error) && data.error.code === 'NOT_FOUND'
+        && typeof detail === 'string' && detail.startsWith('No connected supplier is available for this model.')
+      const routingError = missingSupplier ? '当前模型渠道暂不可用，请选择其他模型，或联系管理员核对供应商配置。'
+        : response.status === 404 && record(data) && data.detail === 'upstream_request_rejected'
+          ? '模型服务拒绝了本次请求，请重新选择当前可用模型，或联系管理员核对模型渠道。' : undefined
       const admission = payload.path === 'async-videos/v1/tasks' && record(data) && typeof data.detail === 'string'
         ? new Map([
           ['video_storage_capacity_reached', { status: 503, error: '视频缓存暂时没有足够空间，本次请求未提交至模型，请稍后重试。' }],
@@ -945,8 +950,8 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
       const rejected = admission?.status === response.status ? admission.error : undefined
       const busy = !rejected && isModelBusy(data, response.status)
       result = { status: rejected ? 'failed' : response.status >= 500 ? 'indeterminate' : 'failed', outputs: [],
-        error: insufficient ? insufficientCreditsMessage : busy ? modelBusyMessage : stageError('网关提交', message(rejected || (!hasWorkSkills && typeof detail === 'string' ? detail : '网关返回错误响应，是否已转发上游尚未确认。'), credentials.apiKey), response.status),
-        errorCode: insufficient ? insufficientCreditsCode : busy ? modelBusyCode : generationErrorCode,
+        error: insufficient ? insufficientCreditsMessage : busy ? modelBusyMessage : stageError('网关提交', message(routingError || rejected || (!hasWorkSkills && typeof detail === 'string' ? detail : '网关返回错误响应，是否已转发上游尚未确认。'), credentials.apiKey), response.status),
+        errorCode: insufficient ? insufficientCreditsCode : busy ? modelBusyCode : missingSupplier ? 'MODEL_UNAVAILABLE' : generationErrorCode,
         errorStage: '网关提交', errorStatus: response.status,
         tokenId: credentials.tokenId, protocol }
       } else {

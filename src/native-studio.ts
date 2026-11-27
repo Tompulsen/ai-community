@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { SkillReference } from '../shared/community-skills'
 import { reactive, watch } from 'vue'
+import { combineAbortSignals } from './abort-signals'
 import { refreshAccountBalance } from './account-balance'
 import { generationErrorCode, insufficientCreditsCode, insufficientCreditsMessage, isInsufficientCredits } from '../shared/studio/insufficient-credits'
 import { isModelBusy, modelBusyCode, modelBusyMessage } from '../shared/studio/model-busy'
@@ -610,7 +611,9 @@ async function queryCreationTask(path: string, task: CreationTask, controller: P
   else activeTaskQueries++
   try {
     check()
-    return await api<unknown>(path, { signal: AbortSignal.any([signal, AbortSignal.timeout(65000)]) })
+    const combined = combineAbortSignals([signal, AbortSignal.timeout(65000)])
+    try { return await api<unknown>(path, { signal: combined.signal }) }
+    finally { combined.dispose() }
   } finally {
     const next = waitingTaskQueries.shift()
     if (next) next()
@@ -618,7 +621,7 @@ async function queryCreationTask(path: string, task: CreationTask, controller: P
   }
 }
 function monitorSubmission(task: CreationTask, controller: AbortController, version: number) {
-  const stopped = new AbortController(), monitoring = { signal: AbortSignal.any([controller.signal, stopped.signal]) }
+  const stopped = new AbortController(), monitoring = combineAbortSignals([controller.signal, stopped.signal])
   void (async () => {
     await delay(monitoring.signal, 2000)
     while (!monitoring.signal.aborted && epoch === version && task.owner === activeOwner()) {
@@ -639,8 +642,8 @@ function monitorSubmission(task: CreationTask, controller: AbortController, vers
       }
       await delay(monitoring.signal, wait)
     }
-  })().catch(() => {})
-  return () => stopped.abort()
+  })().catch(() => {}).finally(monitoring.dispose)
+  return () => { stopped.abort(); monitoring.dispose() }
 }
 async function poll(task: CreationTask, controller: AbortController, version: number) {
   let deadline = task.deadline ?? task.createdAt + (task.kind === 'video' ? 2 * 60 * 60_000 : task.kind === 'text' ? textGenerationTimeouts.total + textGenerationTimeouts.save : 30 * 60_000)
@@ -981,17 +984,20 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     if (epoch === version) { task.phase = 'error'; task.settledAt = Date.now(); task.error = '操作已停止，未提交生成。'; await persist() }
     return task
   }
-  let responseReceived = false, responseStatus: number | undefined
-  const stopMonitoring = task.kind === 'image' ? monitorSubmission(task, controller, version) : () => {}
+  let requestStarted = false, responseReceived = false, responseStatus: number | undefined
+  let stopMonitoring = () => {}
   try {
-    const response = await fetch('/api/creation/generate', {
+    stopMonitoring = task.kind === 'image' ? monitorSubmission(task, controller, version) : () => {}
+    const options: RequestInit = {
       method: 'POST', credentials: 'same-origin', signal: controller.signal,
       headers: { 'Content-Type': 'application/json', ...(input.kind === 'video' ? { Prefer: 'respond-async' } : input.kind === 'text' ? { 'X-Creation-Stream': creationStreamProtocol } : {}), ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
         ...(acceptedAccount ? { 'X-New-Api-User': acceptedAccount } : {}),
         ...(contractVersion !== 2 && selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}),
         ...(contractVersion !== 2 && selectedGroup ? { 'X-New-Api-Group': encodeURIComponent(selectedGroup) } : {}) },
       body,
-    }).finally(stopMonitoring)
+    }
+    requestStarted = true
+    const response = await fetch('/api/creation/generate', options).finally(stopMonitoring)
     responseReceived = true; responseStatus = response.status
     if (!response.ok) {
       const data = await response.json().catch(() => ({}))
@@ -1054,22 +1060,22 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     if (!finished) await poll(task, controller, version)
   } catch (error) {
     if (epoch === version) {
-      const notAccepted = record(error) && error.notAccepted === true
+      const notAccepted = !requestStarted || record(error) && error.notAccepted === true
       if (notAccepted && record(error) && ['NEW_API_GROUP_TOKEN_UNAVAILABLE', 'NEW_API_TOKEN_REQUIRED'].includes(String(error.code)) && task.group) {
         invalidateCreationModels(task.group)
         if (task.group === creation.selectedGroup) creation.modelsError = errorMessage(error)
       }
       task.phase = notAccepted ? 'error' : task.kind === 'text' && task.upstreamId ? 'paused' : 'attention'
-      if (controller.signal.aborted && task.kind !== 'text') task.phase = 'paused'
+      if (controller.signal.aborted && task.kind !== 'text' && !notAccepted) task.phase = 'paused'
       task.settledAt ??= Date.now()
-      const stage = record(error) && typeof error.errorStage === 'string' ? error.errorStage : responseReceived ? '社区响应读取' : '提交到社区'
+      const stage = !requestStarted ? '生成准备' : record(error) && typeof error.errorStage === 'string' ? error.errorStage : responseReceived ? '社区响应读取' : '提交到社区'
       const status = record(error) && typeof error.errorStatus === 'number' ? error.errorStatus : responseStatus
       const detail = record(error) && typeof error.errorStage === 'string' ? errorMessage(error)
         : `${stage}失败${status ? `（HTTP ${status}）` : ''}：${errorMessage(error)}`
       task.errorStage = stage; task.errorStatus = status
       task.errorCode = !controller.signal.aborted && isInsufficientCredits(error) ? insufficientCreditsCode : !controller.signal.aborted && isModelBusy(error) ? modelBusyCode : generationErrorCode
       if (task.errorCode === insufficientCreditsCode) void refreshAccountBalance(true)
-      task.error = controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : detail
+      task.error = !requestStarted ? `${detail} 未提交生成，请重试。` : controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : detail
       if (task.errorCode === insufficientCreditsCode) task.error = insufficientCreditsMessage
       else if (task.errorCode === modelBusyCode) task.error = modelBusyMessage
       if (!controller.signal.aborted && !notAccepted) {
@@ -1080,8 +1086,8 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     }
   } finally {
     stopMonitoring()
-    if (epoch === version) await persist()
     if (controllers.get(task.id) === controller) controllers.delete(task.id)
+    if (epoch === version) await persist()
   }
   return task
 }

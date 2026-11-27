@@ -751,6 +751,33 @@ async function relayRequestBody(init) {
     ? Object.fromEntries(await request.formData()) : await request.json()
 }
 
+test('supplier and wrapped gateway failures have safe actionable errors without replaying requests', async t => {
+  const missing = 'No connected supplier is available for this model. Connect a supplier that serves this model and add it to this API key\'s group.'
+  const cases = [
+    { status: 404, data: { error: { code: 'NOT_FOUND', message: missing + ' Private diagnostic ' + apiKey } }, code: 'MODEL_UNAVAILABLE', expected: /当前模型渠道暂不可用/ },
+    { status: 404, data: { detail: 'upstream_request_rejected' }, code: 'GENERATION_ERROR', expected: /模型服务拒绝了本次请求/ },
+    { status: 404, data: { error: { code: 'NOT_FOUND', message: 'Reference image not found' } }, code: 'GENERATION_ERROR', expected: /Reference image not found/ },
+    { status: 403, data: { error: { code: 'access_denied', message: 'Model access denied' } }, code: 'GENERATION_ERROR', expected: /Model access denied/ },
+    { status: 500, data: { detail: 'upstream_request_rejected' }, code: 'GENERATION_ERROR', expected: /网关返回错误响应/ },
+  ]
+  for (const [index, value] of cases.entries()) await t.test(String(index), async t => {
+    const f = fixture(t, { fetch: () => Response.json(value.data, { status: value.status }) })
+    const input = { ...imageRequest, requestId: `supplier-${index}` }
+    const response = await submit(f.app, input), result = response.json()
+    assert.equal(result.status, value.status >= 500 ? 'indeterminate' : 'failed')
+    assert.equal(result.errorCode, value.code)
+    assert.equal(result.errorStatus, value.status)
+    assert.match(result.error, value.expected)
+    assert.doesNotMatch(response.payload, new RegExp(apiKey))
+    assert.doesNotMatch(response.payload, /Private diagnostic|upstream_request_rejected/)
+    const recovered = (await f.app.inject(`/api/creation/requests/${input.requestId}`)).json()
+    assert.equal(recovered.error, result.error)
+    assert.equal(recovered.errorCode, value.code)
+    await submit(f.app, input)
+    assert.equal(f.calls.length, 1)
+  })
+})
+
 test('wallet failures keep a safe classification across model kinds, streams and recovery', async t => {
   for (const kind of ['text', 'image', 'video']) await t.test(kind, async t => {
     const f = fixture(t, { fetch: () => Response.json({ error: { code: 'insufficient_user_quota', message: '用户额度不足, 剩余额度: 1' } }, { status: 403 }) })

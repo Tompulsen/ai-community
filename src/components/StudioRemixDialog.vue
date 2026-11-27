@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
+import { combineAbortSignals } from '../abort-signals'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ImagePlus, LoaderCircle, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
@@ -69,10 +70,13 @@ async function apply(withReferences: boolean, background = false) {
       for (const file of originals.value.filter(file => selected.value.includes(file.id))) {
         let content = file.url
         if (source.kind === 'resource') {
-          const response = await fetch(mediaSource(file.url)!, { credentials: 'same-origin', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]) })
-          if (!response.ok) throw new Error('参考图无法读取，请取消该图片或重试。')
-          const blob = await response.blob()
-          content = await prepareStudioImage(new File([blob], file.name, { type: blob.type }), true)
+          const combined = combineAbortSignals([controller.signal, AbortSignal.timeout(30000)])
+          try {
+            const response = await fetch(mediaSource(file.url)!, { credentials: 'same-origin', signal: combined.signal })
+            if (!response.ok) throw new Error('参考图无法读取，请取消该图片或重试。')
+            const blob = await response.blob()
+            content = await prepareStudioImage(new File([blob], file.name, { type: blob.type }), true)
+          } finally { combined.dispose() }
         }
         images.push({ name: file.name, type: /^data:([^;,]+)/.exec(content)?.[1] || file.type, size: file.size || 0, content, isText: false, sourceUrl: file.url, fromWorkId: source.id })
       }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { combineAbortSignals } from '../abort-signals'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronRight } from '@lucide/vue'
 import type { Work, WorkSummary } from '../data'
@@ -22,7 +23,8 @@ async function loadMore() {
   if (cursor) params.set('cursor', cursor)
   loading.value = true; failed.value = false
   try {
-    const page = await api<{ items: WorkSummary[]; nextCursor?: string | null }>(`/api/works?${params}`, { signal: AbortSignal.any([active.signal, AbortSignal.timeout(15000)]) })
+    const combined = combineAbortSignals([active.signal, AbortSignal.timeout(15000)])
+    const page = await api<{ items: WorkSummary[]; nextCursor?: string | null }>(`/api/works?${params}`, { signal: combined.signal }).finally(combined.dispose)
     if (active !== controller) return
     const known = new Set([selected.id, ...items.value.map(item => item.id)])
     items.value.push(...page.items.filter(item => {

@@ -11,7 +11,7 @@ async function fixture(page: Page, authenticated = true, delayed = false) {
     const path = new URL(route.request().url()).pathname
     if (path === '/api/creation/models') {
       if (delayed) await new Promise(resolve => setTimeout(resolve, 900))
-      return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }, { id: 'gpt-image-1', kinds: ['image'] }, { id: 'sora-2', kinds: ['video'] }, { id: 'gpt-5', kinds: ['text'] }, { id: 'claude-opus', kinds: ['text'] }] } })
+      return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }, { id: 'gpt-image-1', kinds: ['image'] }, { id: 'sora-2', kinds: ['video'], video: { aspectRatios: ['16:9', '9:16'], resolutions: ['720p'], durations: [4, 8, 12] } }, { id: 'gpt-5', kinds: ['text'] }, { id: 'claude-opus', kinds: ['text'] }] } })
     }
     if (path === '/api/creation/generate') {
       calls.push(route.request().postDataJSON())
@@ -240,7 +240,7 @@ for (const kind of ['image', 'video'] as const) {
     const composer = page.getByRole('form', { name: '快捷创作', exact: true })
     if (kind === 'video') await page.getByRole('button', { name: '视频生成', exact: true }).click()
     await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('海边日落下的一座灯塔')
-    await composer.getByLabel('添加参考图', { exact: true }).setInputFiles('public/assets/brand/octopus-community.jpg')
+    await composer.getByLabel(kind === 'video' ? '添加参考素材' : '添加参考图', { exact: true }).setInputFiles('public/assets/brand/octopus-community.jpg')
     await expect(composer.getByRole('button', { name: '预览参考图 1', exact: true })).toBeVisible()
     await composer.getByRole('button', { name: '发送到创作台', exact: true }).click()
     await expect(page).toHaveURL(new RegExp('/create/' + kind))
@@ -302,6 +302,7 @@ test('inline video model preserves input and references and carries video parame
   await expect(composer.getByRole('button', { name: '预览参考图 1', exact: true })).toBeVisible()
   await composer.getByRole('combobox', { name: '模型', exact: true }).click()
   await page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: 'sora-2', exact: true }).click()
+  await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('sora-2')
   await expect(page).toHaveURL('/discover')
   await expect(composer.getByRole('textbox', { name: '创作描述', exact: true })).toHaveValue('保持同一份描述和参考图')
   await expect(composer.getByRole('button', { name: '预览参考图 1', exact: true })).toBeVisible()
@@ -328,7 +329,7 @@ test('switching to video retains image references above its lower limit', async 
   await expect(composer.getByRole('button', { name: /^预览参考图 / })).toHaveCount(11)
   await page.getByRole('button', { name: '视频生成', exact: true }).click()
   await expect(composer.getByRole('button', { name: /^预览参考图 / })).toHaveCount(11)
-  await expect(composer.getByRole('alert')).toContainText('参考图数量超过当前创作类型上限')
+  await expect(composer.getByRole('alert')).toContainText('当前模型最多支持 10 张参考图片，已选 11 张。')
   await expect(composer.getByRole('button', { name: '发送到创作台', exact: true })).toBeDisabled()
   await page.getByRole('button', { name: '图片生成', exact: true }).click()
   await expect(composer.getByRole('button', { name: /^预览参考图 / })).toHaveCount(11)
@@ -373,7 +374,7 @@ for (const succeeds of [true, false]) {
       await page.keyboard.press('Escape')
       await expect(page.getByText('无法恢复首页所选模型分组，请返回首页重试。', { exact: true })).toBeVisible()
       expect(calls).toHaveLength(0)
-      expect(await page.evaluate(id => sessionStorage.getItem('ai-community-next:studio-entry:' + id), id)).toContain('分组恢复验证')
+      expect(await page.evaluate(async id => (await (await import('/src/studio-entry.ts')).readStudioEntry(id, '17')).prompt, id)).toBe('分组恢复验证')
     }
     expect(attempts).toBe(1)
   })

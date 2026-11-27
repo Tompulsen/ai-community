@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import { X } from '@lucide/vue'
+import { addFallbackPopover, removeFallbackPopover, supportsNativePopover } from '../studio-popover-fallback'
 
 const props = withDefaults(defineProps<{ label: string; triggerLabel?: string; width?: number; disabled?: boolean; placement?: 'auto' | 'bottom-end'; panelClass?: string }>(), { width: 360 })
 const emit = defineEmits<{ toggle: [open: boolean] }>()
 const id = `studio-${useId()}`
 const trigger = ref<HTMLButtonElement>(), panel = ref<HTMLElement>(), opened = ref(false)
 const portalTarget = ref<string | HTMLElement>('body')
-const resizeObserver = new ResizeObserver(() => position())
+const nativePopover = supportsNativePopover()
+const resizeObserver = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => position())
+let opening = 0
 function beforeToggle(event: Event) {
   // Measure the open panel before allowing its first visible frame.
   if ((event as ToggleEvent).newState === 'open' && panel.value) panel.value.style.visibility = 'hidden'
@@ -33,44 +36,65 @@ function position() {
   panel.value.style.left = `${Math.max(12, Math.min(left, innerWidth - bounds.width - 12))}px`
   panel.value.style.top = `${above ? Math.max(top + 8, anchor.top - bounds.height - 8) : anchor.bottom + 8}px`
 }
-async function toggle(event: Event) {
-  opened.value = (event as ToggleEvent).newState === 'open'
-  emit('toggle', opened.value)
+function stopTracking() {
   window.removeEventListener('resize', position)
   window.removeEventListener('scroll', position, true)
   window.visualViewport?.removeEventListener('resize', position)
   window.visualViewport?.removeEventListener('scroll', position)
-  resizeObserver.disconnect()
-  if (opened.value) {
-    await nextTick(); position()
+  resizeObserver?.disconnect()
+}
+async function setOpened(value: boolean) {
+  const request = ++opening
+  opened.value = value
+  emit('toggle', value)
+  stopTracking()
+  if (value) {
+    await nextTick()
+    if (request !== opening || !panel.value?.isConnected) return
+    position()
     if (panel.value) {
       panel.value.style.removeProperty('visibility')
-      resizeObserver.observe(panel.value)
+      resizeObserver?.observe(panel.value)
       const content = panel.value.querySelector('.studio-popover-content')
-      if (content) resizeObserver.observe(content)
+      if (content) resizeObserver?.observe(content)
     }
     window.addEventListener('resize', position)
     if (props.placement === 'bottom-end') window.addEventListener('scroll', position, true)
     window.visualViewport?.addEventListener('resize', position)
     window.visualViewport?.addEventListener('scroll', position)
+    if (!nativePopover) panel.value.querySelector<HTMLElement>('[autofocus], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]')?.focus({ preventScroll: true })
   }
 }
-function close() { panel.value?.hidePopover(); if (trigger.value?.isConnected) trigger.value.focus({ preventScroll: true }) }
-onMounted(() => { portalTarget.value = trigger.value?.closest<HTMLElement>('dialog, [popover]') || 'body' })
+function toggle(event: Event) { if (nativePopover) void setOpened((event as ToggleEvent).newState === 'open') }
+function close(restoreFocus = true) {
+  if (nativePopover) panel.value?.hidePopover()
+  else {
+    if (panel.value) removeFallbackPopover(panel.value)
+    if (opened.value) void setOpened(false)
+  }
+  if (restoreFocus && trigger.value?.isConnected) trigger.value.focus({ preventScroll: true })
+}
+function open() {
+  if (props.disabled || !panel.value || !trigger.value) return
+  if (nativePopover) { panel.value.showPopover(); return }
+  if (opened.value) return
+  panel.value.style.visibility = 'hidden'
+  addFallbackPopover({ panel: panel.value, trigger: trigger.value, close })
+  void setOpened(true)
+}
+function clickTrigger() { if (!nativePopover) { if (opened.value) close(); else open() } }
+onMounted(() => { portalTarget.value = trigger.value?.closest<HTMLElement>(nativePopover ? 'dialog, [popover]' : 'dialog') || 'body' })
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', position)
-  window.removeEventListener('scroll', position, true)
-  window.visualViewport?.removeEventListener('resize', position)
-  window.visualViewport?.removeEventListener('scroll', position)
-  resizeObserver.disconnect()
+  opening++; stopTracking()
+  if (!nativePopover && panel.value) removeFallbackPopover(panel.value)
 })
-defineExpose({ close, open: () => panel.value?.showPopover() })
+defineExpose({ close, open })
 </script>
 
 <template>
-  <button ref="trigger" type="button" class="studio-tool" :popovertarget="id" :title="label" :aria-label="triggerLabel || label" :disabled="disabled" aria-haspopup="dialog" :aria-expanded="opened"><slot name="trigger" /></button>
-  <Teleport :to="portalTarget"><div :id="id" ref="panel" popover="auto" class="studio-popover" :class="panelClass" role="dialog" :aria-label="label" :style="{ '--studio-popover-width': `${props.width}px` }" @beforetoggle="beforeToggle" @toggle="toggle">
-    <div class="studio-popover-heading"><strong>{{ label }}</strong><button type="button" class="icon-button" :aria-label="`关闭${label}`" :title="`关闭${label}`" :popovertarget="id" popovertargetaction="hide"><X :size="16" /></button></div>
+  <button ref="trigger" type="button" class="studio-tool" :popovertarget="nativePopover ? id : undefined" :title="label" :aria-label="triggerLabel || label" :disabled="disabled" aria-haspopup="dialog" :aria-expanded="opened" :aria-controls="id" @click="clickTrigger"><slot name="trigger" /></button>
+  <Teleport :to="portalTarget"><div :id="id" ref="panel" :popover="nativePopover ? 'auto' : undefined" :hidden="!nativePopover && !opened" class="studio-popover" :class="[panelClass, { 'studio-popover-fallback': !nativePopover }]" role="dialog" :aria-label="label" :style="{ '--studio-popover-width': `${props.width}px` }" @beforetoggle="beforeToggle" @toggle="toggle">
+    <div class="studio-popover-heading"><strong>{{ label }}</strong><button type="button" class="icon-button" :aria-label="`关闭${label}`" :title="`关闭${label}`" @click="close()"><X :size="16" /></button></div>
     <div class="studio-popover-content"><slot /></div>
   </div></Teleport>
 </template>

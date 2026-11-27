@@ -31,7 +31,6 @@ async function fixture(page: Page, mode: 'stages' | 'save' | 'unknown', serverCl
         errorStage: mode === 'save' ? '结果保存' : '网关提交', error: mode === 'save' ? '原图保存暂时失败。' : '本次生成结果待确认。' }
       return route.fulfill({ status: 202, json: state })
     }
-    if (path.endsWith('/save')) { stage('saving'); return route.fulfill({ status: 202, json: state }) }
     if (path === `/api/creation/requests/${requestId}`) return route.fulfill({ json: state })
     return route.fulfill({ status: 404, json: { message: `Unmocked path: ${path}` } })
   })
@@ -71,14 +70,19 @@ for (const width of [1440, 390]) {
     await page.screenshot({ path: info.outputPath(`complete-${width}.png`) })
     await verified(page, state)
   })
-  test(`retries only saving the original result at ${width}px`, async ({ page }) => {
+  test(`queries a legacy save failure without saving or generating again at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
     const state = await fixture(page, 'save'), response = await generate(page)
-    await response.getByRole('button', { name: '重试保存', exact: true }).click()
-    await expect(response).toContainText('正在保存图片')
+    await expect(response).toContainText('原图保存暂时失败。')
+    const query = response.getByRole('button', { name: '查询原结果', exact: true })
+    await query.click()
+    await expect(query).toBeVisible()
+    await expect(response).toContainText('原图保存暂时失败。')
     state.finish()
+    await query.click()
     await expect(response.getByRole('button', { name: /查看大图：预览生成图片 1/ })).toBeVisible({ timeout: 8000 })
-    expect(state.requests.filter(request => request.path === `/api/creation/requests/${state.id()}/save`)).toEqual([{ path: `/api/creation/requests/${state.id()}/save`, method: 'POST' }])
+    expect(state.requests.filter(request => request.path === `/api/creation/requests/${state.id()}` && request.method === 'GET').length).toBeGreaterThanOrEqual(2)
+    expect(state.requests.some(request => request.path.endsWith('/save'))).toBe(false)
     await verified(page, state)
   })
   test(`queries an unknown original result at ${width}px without generating again`, async ({ page }) => {

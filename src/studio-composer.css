@@ -15,9 +15,11 @@
   box-shadow: var(--popover-shadow); overflow-y: auto; overscroll-behavior: contain;
 }
 .studio-popover-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 48px; padding: 8px 12px; color: var(--muted); }
+.studio-popover-fallback[hidden] { display: none; }
 .studio-popover-heading strong { font-size: 14px; font-weight: 500; }
 .studio-popover-content { padding: 16px; }
 @media (max-width: 600px) {
+  .studio-tool { min-height: 44px; min-width: 44px; }
   .studio-popover { width: 100%; max-width: 100%; border: 0; border-radius: 24px 24px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
   .studio-popover-heading { position: sticky; top: 0; z-index: 1; background: var(--popover-surface); }
   .studio-popover-heading .icon-button { width: 44px; height: 44px; flex: none; }

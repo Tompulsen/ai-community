@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Copy, Eraser, Images, ListChecks, Menu, MoreVertical, Receipt, KeyRound, CircleDollarSign, Settings, SquarePen, Trash2, Undo2 } from '@lucide/vue'
 import { api, errorMessage, notify, session, sessionStatus } from '../state'
 import { chats, chatDeletion, loadChats, newChat, saveChats, undoRemovedChats, type Skill } from '../native-chat'
-import { armStudioEntryStart, claimStudioEntryStart, clearStudioEntry, readStudioEntry } from '../studio-entry'
+import { armStudioEntryStart, claimStudioEntryStart, readStudioEntry } from '../studio-entry'
 import { modelChoices, modelsForKind } from '../model-preferences'
 import { activateConversation, conversationKind, syncMediaConversations } from '../studio-conversations'
 import type { Work, WorkFile } from '../data'
@@ -320,13 +320,18 @@ watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => ch
   }
 }, { flush: 'post' })
 let entryGroupAttempt = '', failedEntry = ''
-watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () => creation.loaded, () => creation.modelsLoaded, () => creation.modelsError, () => creation.groupsLoading, () => creation.groupSwitching, () => creation.modelsLoading, kind], async (_, __, onCleanup) => {
+const entryImports = new Set<string>(), entryStarts = new Set<string>(), entryRetry = ref(0)
+watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () => creation.loaded, () => creation.modelsLoaded, () => creation.modelsError, () => creation.groupsLoading, () => creation.groupSwitching, () => creation.modelsLoading, kind, entryRetry], async () => {
   const id = route.query.entry, owner = session.user?.id
   if (typeof id !== 'string' || !owner || !chats.ready || !creation.loaded || !creation.modelsLoaded && !creation.modelsError || creation.groupsLoading || creation.groupSwitching || creation.modelsLoading) return
-  let cancelled = false
-  onCleanup(() => { cancelled = true })
+  const key = `${owner}:${id}`, requestedKind = kind.value, path = route.fullPath
+  if (entryImports.has(key)) return
+  entryImports.add(key)
+  const current = () => entryLive && owner === session.user?.id && route.fullPath === path && kind.value === requestedKind
+  let retry = false
   try {
-    const entry = readStudioEntry(id)
+    const entry = await readStudioEntry(id, owner)
+    if (!current() || creation.groupsLoading || creation.groupSwitching || creation.modelsLoading) return
     if (entry.owner && entry.owner !== owner) throw new Error('账号已切换，请返回首页重新提交创作。')
     if (entry.kind !== kind.value) throw new Error('创作类型已改变，请返回首页重新提交。')
     if (failedEntry === `${owner}:${id}`) throw new Error('无法恢复首页所选模型分组，请返回首页重试。')
@@ -336,6 +341,7 @@ watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () =>
       if (entryGroupAttempt === id) throw new Error(creation.groupsError || '无法恢复首页所选模型分组，请返回首页重试。')
       entryGroupAttempt = id
       await selectCreationGroup(parameters.group)
+      retry = current()
       return
     }
     if (creation.modelsError) { failedEntry = `${owner}:${id}`; throw new Error(creation.modelsError) }
@@ -351,23 +357,33 @@ watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () =>
       next.mediaDrafts = { [entry.kind]: { ...entry.parameters, prompt: entry.prompt, references: entry.references } }
     }
     await saveChats(true)
-    if (cancelled || !entryLive || owner !== session.user?.id || route.query.entry !== id || kind.value !== entry.kind) return
-    armStudioEntryStart(next.id, owner)
-    clearStudioEntry(id)
+    if (!current()) return
+    const armed = await armStudioEntryStart(next.id, owner, id)
+    if (!current()) return
+    if (!armed) throw new Error('这份创作输入已处理或已失效，请检查原生成记录，避免重复提交。')
     await router.replace({ query: { conversation: next.id, start: '1' } })
-  } catch (cause) { if (!cancelled && entryLive && owner === session.user?.id) error.value = errorMessage(cause) }
+  } catch (cause) { if (current()) error.value = errorMessage(cause) }
+  finally { entryImports.delete(key); if (retry) entryRetry.value++ }
 }, { immediate: true, flush: 'post' })
 const entryReady = computed(() => kind.value === 'text' ? chat.value?.canSend : workspace.value?.canGenerate && !workspace.value.restoringParameters)
 watch([() => route.query.start, () => route.query.conversation, workspace, chat, entryReady, () => chats.activeId, () => chats.ready, () => creation.loaded, () => creation.modelsLoaded, () => creation.modelsLoading, () => creation.groupSwitching, () => creation.groupsLoading], async () => {
   const id = route.query.conversation, owner = session.user?.id
   if (route.query.start !== '1' || typeof id !== 'string' || id !== chats.activeId || !owner || !chats.ready || !creation.loaded || !entryReady.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
   const target = kind.value === 'text' ? chat.value : workspace.value, requestedKind = kind.value
-  await nextTick()
-  if (!entryLive || kind.value !== requestedKind || owner !== session.user?.id || chats.activeId !== id || route.query.conversation !== id || route.query.start !== '1' || (kind.value === 'text' ? chat.value : workspace.value) !== target || !entryReady.value || !claimStudioEntryStart(id, owner)) return
-  const pending = requestedKind === 'text' ? chat.value!.send() : workspace.value!.generateBackground(() => {})
-  const { start: _, ...query } = route.query
-  await router.replace({ query })
-  await pending
+  const key = `${owner}:${id}`
+  if (entryStarts.has(key)) return
+  entryStarts.add(key)
+  const current = () => entryLive && kind.value === requestedKind && owner === session.user?.id && chats.activeId === id
+    && route.query.conversation === id && route.query.start === '1' && (kind.value === 'text' ? chat.value : workspace.value) === target && entryReady.value
+  try {
+    await nextTick()
+    if (!current() || !await claimStudioEntryStart(id, owner) || !current()) return
+    const pending = requestedKind === 'text' ? chat.value!.send() : workspace.value!.generateBackground(() => {})
+    const { start: _, ...query } = route.query
+    await router.replace({ query })
+    await pending
+  } catch (cause) { if (current()) error.value = errorMessage(cause) }
+  finally { entryStarts.delete(key) }
 }, { flush: 'post' })
 </script>
 
