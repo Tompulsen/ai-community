@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 import AxeBuilder from '@axe-core/playwright'
 
-async function fixture(page: Page) {
+async function fixture(page: Page, gallery = false) {
   if (['localhost', '127.0.0.1', '[::1]'].includes(new URL(String(test.info().project.use.baseURL)).hostname)) {
     const runtime = await readFile('server/runtime.ts', 'utf8')
     const policy = runtime.match(/'Content-Security-Policy': "([^"]+)"/)![1]!
@@ -34,11 +34,11 @@ async function fixture(page: Page) {
     }
     return route.fulfill({ json: { items: [] } })
   })
-  await page.addInitScript(() => {
+  await page.addInitScript(gallery => {
     if (sessionStorage.getItem('browser-save-fixture')) return
     sessionStorage.setItem('browser-save-fixture', '1')
-    localStorage.setItem('octopus:user-17:native-media-settings', JSON.stringify({ autoDownload: false, autoSaveGallery: false }))
-  })
+    localStorage.setItem('octopus:user-17:native-media-settings', JSON.stringify({ autoDownload: false, autoSaveGallery: gallery }))
+  }, gallery)
   await page.goto('/create/image')
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
   return { state, image }
@@ -65,6 +65,92 @@ async function storedImages(page: Page) {
   })
 }
 
+test('pending originals show a loading placeholder and gallery covers share their browser save', async ({ page }, info) => {
+  const { state, image } = await fixture(page, true)
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const reads: string[] = []
+  await page.route('**/api/creation/media?**', async route => {
+    reads.push(new URL(route.request().url()).searchParams.get('variant') || 'original')
+    await pending
+    await route.fulfill({ contentType: 'image/jpeg', body: image })
+  })
+  try {
+    await send(page)
+    await expect.poll(() => reads.length).toBe(1)
+    await expect(page.locator('.creation-image').getByRole('status')).toHaveText('正在加载图片')
+    await expect(page.locator('.creation-image img')).toHaveCount(0)
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({ width, height: 900 })
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await page.screenshot({ path: info.outputPath(`image-loading-${width}.png`) })
+    }
+    await page.getByRole('button', { name: '作品库', exact: true }).click()
+    const library = page.getByRole('dialog', { name: '作品库', exact: true })
+    await expect(library.getByText('正在加载封面', { exact: true })).toBeAttached()
+    await page.waitForTimeout(250)
+    expect(reads).toEqual(['original'])
+    release()
+    await expect.poll(() => library.locator('.cover-preview img').evaluateAll(images => images.length === 1 && (images[0] as HTMLImageElement).naturalWidth > 0)).toBe(true)
+    await expect.poll(async () => (await storedImages(page)).sizes).toEqual([image.length])
+    expect(reads).toEqual(['original'])
+    await page.unroute('**/api/creation/media?**')
+    state.available = false
+    const originals = state.originals
+    await page.reload()
+    await page.getByRole('button', { name: '作品库', exact: true }).click()
+    await expect.poll(() => page.locator('.cover-preview img').evaluateAll(images => images.length === 1 && (images[0] as HTMLImageElement).naturalWidth > 0)).toBe(true)
+    expect(state.originals).toBe(originals)
+    expect(state.generations).toBe(1)
+  } finally { release() }
+})
+
+test('a stalled gallery original stops spinning and retries the same result', async ({ page }) => {
+  const { state, image } = await fixture(page, true)
+  await page.evaluate(() => {
+    const fetchMedia = window.fetch, timeout = window.setTimeout.bind(window)
+    ;(window as any).stallGalleryImage = true
+    window.setTimeout = ((handler: TimerHandler, ms?: number, ...args: any[]) => timeout(handler, ms && ms >= 30000 ? ms / 100 : ms, ...args)) as typeof setTimeout
+    window.fetch = async (...args) => {
+      if ((window as any).stallGalleryImage && new URL(String(args[0]), location.href).pathname === '/api/creation/media') {
+        return new Response(new ReadableStream({ cancel: () => new Promise<void>(() => {}) }), { headers: { 'Content-Type': 'image/jpeg' } })
+      }
+      return fetchMedia(...args)
+    }
+  })
+  await send(page)
+  await page.getByRole('button', { name: '作品库', exact: true }).click()
+  const library = page.getByRole('dialog', { name: '作品库', exact: true })
+  const retry = library.getByRole('button', { name: '重新加载封面：浏览器保存原图', exact: true })
+  await expect(retry).toBeVisible({ timeout: 8000 })
+  await expect(library.getByText('正在加载封面', { exact: true })).toHaveCount(0)
+  expect((await storedImages(page)).sizes).toEqual([])
+  await page.evaluate(() => { (window as any).stallGalleryImage = false })
+  await retry.click()
+  await expect.poll(() => library.locator('.cover-preview img').evaluateAll(images => images.length === 1 && (images[0] as HTMLImageElement).naturalWidth > 0)).toBe(true)
+  await library.getByRole('button', { name: '重试保存图片', exact: true }).click()
+  await expect.poll(async () => (await storedImages(page)).sizes).toEqual([image.length])
+  expect(state.generations).toBe(1)
+})
+
+test('persistent network failure offers image retry without an unbounded native fallback', async ({ page }) => {
+  const { state, image } = await fixture(page)
+  const reads: string[] = []
+  let fail = true
+  await page.route('**/api/creation/media?**', route => {
+    reads.push(route.request().resourceType())
+    return fail ? route.abort('connectionreset') : route.fulfill({ contentType: 'image/jpeg', body: image })
+  })
+  await send(page)
+  const retry = page.getByRole('button', { name: '重新加载图片', exact: true })
+  await expect(retry).toBeVisible()
+  expect(reads.every(type => type === 'fetch')).toBe(true)
+  fail = false
+  await retry.click()
+  await expect.poll(() => page.locator('.creation-image-preview img').evaluateAll(images => images.length === 1 && (images[0] as HTMLImageElement).naturalWidth > 0)).toBe(true)
+  expect(state.generations).toBe(1)
+})
+
 test('a recovered legacy request switches to its upstream task and saves the original after reload', async ({ page }) => {
   const { state, image } = await fixture(page)
   let requestId = '', recoveries = 0, taskReads = 0
@@ -74,15 +160,19 @@ test('a recovered legacy request switches to its upstream task and saves the ori
     return route.fulfill({ status: 202, json: { status: 'pending', requestId, outputs: [], protocol: 'async', tokenId: 41 } })
   })
   await page.route('**/api/creation/requests/**', route => {
+    const url = new URL(route.request().url())
+    expect(url.pathname).toBe(`/api/creation/requests/${requestId}`)
+    if (url.searchParams.has('upstreamId')) {
+      taskReads++
+      expect(url.searchParams.get('upstreamId')).toBe('legacy-image-task')
+      expect(url.searchParams.get('kind')).toBe('image')
+      expect(url.searchParams.get('tokenId')).toBe('41')
+      return route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/legacy.jpg' }], protocol: 'async', tokenId: 41 } })
+    }
     recoveries++
     return route.fulfill({ json: recoveries === 1
       ? { status: 'pending', requestId, outputs: [], protocol: 'async', tokenId: 41 }
       : { status: 'pending', upstreamId: 'legacy-image-task', outputs: [], protocol: 'async', tokenId: 41 } })
-  })
-  await page.route('**/api/creation/tasks/image/**', route => {
-    taskReads++
-    expect(new URL(route.request().url()).pathname).toBe('/api/creation/tasks/image/legacy-image-task')
-    return route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/legacy.jpg' }], protocol: 'async', tokenId: 41 } })
   })
   await send(page)
   await expect.poll(() => recoveries).toBe(1)
@@ -150,9 +240,12 @@ for (const mode of ['inline', 'stream', 'async']) test(`${mode} completion autom
     state.generations++
     return mode === 'stream'
       ? route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ type: 'result', ...output })}\n\n` })
-      : route.fulfill({ json: mode === 'async' ? { status: 'running', upstreamId: 'browser-task', protocol: 'async', tokenId: 41 } : output })
+      : route.fulfill({ json: mode === 'async' ? { status: 'pending', upstreamId: 'browser-task', protocol: 'async', tokenId: 41 } : output })
   })
-  await page.route('**/api/creation/tasks/image/browser-task?**', route => route.fulfill({ json: output }))
+  await page.route('**/api/creation/requests/**', route => {
+    expect(new URL(route.request().url()).searchParams.get('upstreamId')).toBe('browser-task')
+    return route.fulfill({ json: output })
+  })
   await send(page)
   await expect(page.getByText('图片已保存到此浏览器', { exact: true })).toBeVisible()
   expect((await storedImages(page)).sizes).toEqual([image.length])
@@ -407,7 +500,7 @@ test('display, preview and download reuse one original when browser storage is f
     await page.setViewportSize({ width, height: 1000 })
     const height = await page.locator('.creation-image').evaluate(element => element.getBoundingClientRect().height)
     await page.locator('.creation-image').evaluate(element => { element.style.transform = 'translateX(200vw)' })
-    await expect(page.locator('.creation-image img')).not.toHaveAttribute('src')
+    await expect(page.locator('.creation-image img')).toHaveCount(0)
     expect(await page.locator('.creation-image').evaluate(element => element.getBoundingClientRect().height)).toBe(height)
     await page.locator('.creation-image').evaluate(element => { element.style.transform = '' })
     await expect.poll(() => page.locator('.creation-image img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0)
@@ -427,7 +520,7 @@ test('display, preview and download reuse one original when browser storage is f
   expect((await storedImages(page)).sizes).toEqual([])
 })
 
-test('browser fetch failure still allows native preview and requests the original download', async ({ page }) => {
+test('browser fetch failure shows retry and preserves the explicit original download', async ({ page }) => {
   const { state } = await fixture(page)
   await page.evaluate(() => {
     const originalFetch = window.fetch
@@ -439,12 +532,10 @@ test('browser fetch failure still allows native preview and requests the origina
   })
   await send(page)
   await expect(page.locator('.browser-save')).toContainText('原图传输中断')
-  await expect.poll(() => page.locator('.creation-image img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0)
-  await page.locator('.creation-image-preview').click()
-  const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
-  await expect.poll(() => viewer.locator('.lightbox-content img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0)
+  await expect(page.getByRole('button', { name: '重新加载图片', exact: true })).toBeVisible()
+  await expect(page.locator('.creation-image img')).toHaveCount(0)
   const pending = page.waitForEvent('download')
-  await viewer.getByRole('button', { name: '下载图片', exact: true }).click()
+  await page.getByRole('button', { name: '下载图片', exact: true }).click()
   await confirmImageDownload(page)
   // Browser-native downloads bypass Playwright's mocked page routes.
   const url = new URL((await pending).url())

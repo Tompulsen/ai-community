@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Image, LoaderCircle, Maximize, Play, RefreshCw, Video } from '@lucide/vue'
-import { readableMedia, type CreationTask } from '../native-studio'
+import { forgetCreationImage, readCreationImage, readableMedia, type CreationTask } from '../native-studio'
 import { session, errorMessage } from '../state'
 import { readTaskAsset, readTaskPreview, saveTaskPreview } from '../studio-task-store'
 import { imageThumbnail, mediaPreviewIdentity } from '../studio-media-previews'
@@ -49,12 +49,8 @@ watch([() => session.user?.id, () => props.task.id, () => props.index, identity,
             finally { if (temporary) URL.revokeObjectURL(temporary) }
           }
         } else {
-          let blob = original
-          if (!blob) {
-            const response = await fetch(await readableMedia(url, 'image', true), { credentials: 'same-origin', signal: controller.signal, ...(retry.value ? { cache: 'reload' } : {}) })
-            if (!response.ok) throw new Error('缩略图加载失败，可重试或查看原图。')
-            blob = await response.blob()
-          }
+          if (retry.value) forgetCreationImage(url)
+          const blob = original || await readCreationImage(url, controller.signal)
           cached = { blob: await imageThumbnail(blob, controller.signal) }
         }
         if (!current()) return

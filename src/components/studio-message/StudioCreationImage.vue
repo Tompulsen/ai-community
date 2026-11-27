@@ -4,13 +4,17 @@ const dimensions = new Map<string, { width: number; height: number }>()
 </script>
 
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
-import { RotateCw, SquarePen } from '@lucide/vue'
-import { forgetCreationImage, mediaSource, readCreationImage } from '../../native-studio'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { LoaderCircle, RotateCw, SquarePen } from '@lucide/vue'
+import { forgetCreationImage, readCreationImage } from '../../native-studio'
 
 const props = defineProps<{ src: string; alt: string; label: string; editable?: boolean; thumbnail?: boolean }>()
 const emit = defineEmits<{ open: []; edit: [] }>()
 const size = ref(dimensions.get(props.src))
+const imageStyle = computed(() => size.value && !props.thumbnail ? {
+  width: `min(${size.value.width}px, calc(var(--creation-image-height) * ${size.value.width / size.value.height}))`,
+  aspectRatio: `${size.value.width} / ${size.value.height}`, minHeight: '0',
+} : undefined)
 const loaded = ref(false), failed = ref(false), retrying = ref(false), replacement = ref('')
 const element = ref<HTMLElement>(), fallback = ref('')
 let revision = 0
@@ -18,7 +22,7 @@ let controller: AbortController | undefined, observer: IntersectionObserver | un
 function clearImage() {
   controller?.abort()
   if (replacement.value) URL.revokeObjectURL(replacement.value)
-  replacement.value = ''; fallback.value = ''
+  replacement.value = ''; fallback.value = ''; loaded.value = false
 }
 function release() { observer?.disconnect(); clearImage() }
 watch([() => props.src, () => props.thumbnail, element], () => {
@@ -56,10 +60,9 @@ async function read(retry = false) {
     if (current.signal.aborted || accepted !== revision) return
     if (replacement.value) URL.revokeObjectURL(replacement.value)
     replacement.value = URL.createObjectURL(blob); failed.value = false; loaded.value = false
-  } catch (cause) {
+  } catch {
     if (current.signal.aborted || accepted !== revision) return
-    if ((cause as { status?: number }).status === 0) fallback.value = mediaSource(props.src, props.thumbnail) || ''
-    else failed.value = true
+    failed.value = true
   }
   finally { if (accepted === revision) retrying.value = false }
 }
@@ -78,9 +81,10 @@ function retry() {
 <template>
   <div ref="element" class="creation-image" :class="{ 'creation-image-thumbnail': thumbnail }">
     <button v-if="failed" class="image-retry" type="button" :disabled="retrying" aria-label="重新加载图片" @click="retry"><RotateCw :size="18" /><span>{{ retrying ? '正在加载' : '重新加载图片' }}</span></button>
-    <img v-else-if="thumbnail" :src="replacement || fallback || undefined" :alt="alt" width="72" height="72" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
+    <div v-else-if="!replacement && !fallback" class="image-loading" :style="imageStyle" role="status"><LoaderCircle :size="20" aria-hidden="true" /><span>正在加载图片</span></div>
+    <img v-else-if="thumbnail" :src="replacement || fallback" :alt="alt" width="72" height="72" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
     <button v-else type="button" class="creation-image-preview" :aria-label="label" :aria-busy="!loaded" @click="emit('open')">
-      <img :key="replacement || fallback" :src="replacement || fallback || undefined" :alt="alt" :width="size?.width" :height="size?.height" :style="size ? { width: `min(${size.width}px, calc(var(--creation-image-height) * ${size.width / size.height}))`, aspectRatio: `${size.width} / ${size.height}` } : undefined" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
+      <img :key="replacement || fallback" :src="replacement || fallback" :alt="alt" :width="size?.width" :height="size?.height" :style="imageStyle" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
     </button>
     <button v-if="editable && loaded && !failed" type="button" class="creation-image-edit" aria-label="打开图片画布" title="画布编辑" @click.stop="emit('edit')"><SquarePen :size="18" /></button>
   </div>
@@ -97,9 +101,11 @@ function retry() {
 .creation-image-preview:focus-visible, .image-retry:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .image-retry { display: flex; align-items: center; justify-content: center; gap: 8px; width: min(320px, 100%); min-height: 160px; padding: 16px; border: 0; border-radius: 6px; background: var(--surface-soft); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; }
 .image-retry:disabled { cursor: default; opacity: .6; }
+.image-loading { display: flex; align-items: center; justify-content: center; gap: 8px; width: 320px; max-width: 100%; min-height: 160px; border-radius: 6px; background: var(--surface-soft); color: var(--muted); font-size: 14px; }
 .creation-image-thumbnail, .creation-image-thumbnail > img { width: 72px; height: 72px; flex: none; }
 .creation-image-thumbnail > img { display: block; object-fit: cover; border-radius: 6px; }
 .creation-image-thumbnail .image-retry { width: 72px; min-height: 72px; padding: 4px; font-size: 11px; flex-direction: column; gap: 4px; }
+.creation-image-thumbnail .image-loading { width: 72px; min-height: 72px; font-size: 11px; flex-direction: column; gap: 4px; }
 @media (min-width: 1000px) { .creation-image { --creation-image-height: min(340px, 26dvh); } }
 @media (max-width: 639px) { .creation-image { --creation-image-height: 36dvh; } }
 </style>
