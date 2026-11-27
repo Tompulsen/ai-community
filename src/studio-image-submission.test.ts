@@ -211,6 +211,49 @@ it('an original cannot extend its overall deadline through progress or retries',
   await failed
   expect(vi.getTimerCount()).toBe(0)
 })
+it.each(['headers', 'body', 'cancel'] as const)('original %s waits cannot outlive transfer deadlines when the transport ignores abort', async stage => {
+  const p = await fixture()
+  vi.useFakeTimers()
+  p.send.mockImplementation(async () => {
+    if (stage === 'headers') return new Promise<Response>(() => {})
+    return new Response(new ReadableStream({
+      start(controller) { if (stage === 'cancel') controller.enqueue(new Uint8Array([1])) },
+      cancel() { return new Promise<void>(() => {}) },
+    }), { status: stage === 'cancel' ? 502 : 200, headers: { 'Content-Type': 'image/png' } })
+  })
+  let settled = false
+  const pending = p.readCreationImage(`https://media.example/stuck-${stage}.png`)
+  const outcome = pending.then(() => { settled = true; return undefined }, cause => { settled = true; return cause })
+  await vi.advanceTimersByTimeAsync(300001)
+  expect(settled).toBe(true)
+  expect(await outcome).toMatchObject({ status: stage === 'cancel' ? 502 : 408 })
+  expect(p.send).toHaveBeenCalledTimes(3)
+  expect(vi.getTimerCount()).toBe(0)
+  p.send.mockResolvedValue(new Response(new Uint8Array([1]), { headers: { 'Content-Type': 'image/png' } }))
+  expect((await p.readCreationImage(`https://media.example/stuck-${stage}.png`)).size).toBe(1)
+})
+it('cancels late response bodies after timeout without caching their bytes or blocking a fresh read', async () => {
+  const p = await fixture()
+  vi.useFakeTimers()
+  const late: Array<(response: Response) => void> = [], cancel = vi.fn(), getReader = vi.fn()
+  p.send.mockImplementation(() => new Promise<Response>(resolve => { late.push(resolve) }))
+  const url = 'https://media.example/late.png'
+  const failed = expect(p.readCreationImage(url)).rejects.toMatchObject({ status: 408 })
+  await vi.advanceTimersByTimeAsync(300001)
+  await failed
+  for (const resolve of late) {
+    const response = new Response(new ReadableStream({ cancel }), { headers: { 'Content-Type': 'image/png' } })
+    response.body!.getReader = getReader
+    resolve(response)
+  }
+  await vi.advanceTimersByTimeAsync(0)
+  expect(cancel).toHaveBeenCalledTimes(3)
+  expect(getReader).not.toHaveBeenCalled()
+  p.send.mockResolvedValue(new Response(new Uint8Array([42]), { headers: { 'Content-Type': 'image/png' } }))
+  expect(new Uint8Array(await (await p.readCreationImage(url)).arrayBuffer())).toEqual(new Uint8Array([42]))
+  expect(p.send).toHaveBeenCalledTimes(4)
+  expect(vi.getTimerCount()).toBe(0)
+})
 it('awaits durable conversation registration before the paid POST and sends an immutable input snapshot', async () => {
   const p = await fixture()
   let release!: () => void, entered = false

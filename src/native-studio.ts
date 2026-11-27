@@ -22,6 +22,7 @@ import { imageDownload, originalImageUrl } from './image-download'
 import { chooseImageDownloadFormat } from './image-download-choice'
 import type { ImageDownloadChoice } from '../shared/image-download'
 import { creationStreamProtocol, creationRetryDelay, textGenerationTimeouts } from '../shared/studio/creation-limits'
+import { waitForToolResult } from '../shared/studio/tool-result'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
@@ -440,11 +441,17 @@ async function loadCreationImage(url: string, signal: AbortSignal, preview = fal
     signal.addEventListener('abort', abort, { once: true })
     let status = 0, retryable = remote, message = '原图传输中断，图片生成记录已保留，请重试保存图片。'
     try {
-      const response = await fetch(source, { credentials: 'same-origin', cache: 'no-store', signal: controller.signal })
+      const response = await waitForToolResult(fetch(source, { credentials: 'same-origin', cache: 'no-store', signal: controller.signal }).then(response => {
+        if (controller.signal.aborted) {
+          void response.body?.cancel().catch(() => {})
+          controller.signal.throwIfAborted()
+        }
+        return response
+      }), controller.signal)
       progressed()
       if (!response.ok) {
         status = response.status
-        await response.body?.cancel().catch(() => {})
+        void response.body?.cancel().catch(() => {})
         retryable = remote && [408, 500, 502, 503, 504].includes(response.status)
         message = response.status === 401 ? '登录状态已失效，请重新登录后保存图片。'
           : response.status === 403 ? '当前账号无权读取此图片。'
@@ -452,14 +459,14 @@ async function loadCreationImage(url: string, signal: AbortSignal, preview = fal
         throw new Error(message)
       }
       if (Number(response.headers.get('content-length')) > 32 * 1024 ** 2) {
-        await response.body?.cancel().catch(() => {})
+        void response.body?.cancel().catch(() => {})
         status = 413; retryable = false; message = '原图超过 32 MB，请手动下载保存。'; throw new Error(message)
       }
       const reader = response.body?.getReader(), chunks: Uint8Array<ArrayBuffer>[] = []
       let size = 0
       try {
         while (reader) {
-          const { done, value } = await reader.read()
+          const { done, value } = await waitForToolResult(reader.read(), controller.signal)
           check(); controller.signal.throwIfAborted()
           if (done) break
           if (value.length) progressed()
@@ -467,13 +474,17 @@ async function loadCreationImage(url: string, signal: AbortSignal, preview = fal
           if (size > 32 * 1024 ** 2) { status = 413; retryable = false; message = '原图超过 32 MB，请手动下载保存。'; throw new Error(message) }
           chunks.push(value)
         }
-      } finally { await reader?.cancel().catch(() => {}); reader?.releaseLock() }
+      } finally {
+        // Transport cleanup must not hold the shared read and browser-save slots open.
+        void reader?.cancel().catch(() => {}); reader?.releaseLock()
+      }
       const blob = new Blob(chunks, { type: response.headers.get('content-type')?.split(';')[0] || '' })
       if (!blob.size || !blob.type.startsWith('image/')) { status = 422; retryable = false; message = '原图数据不完整，请重试保存图片。'; throw new Error(message) }
       return blob
     } catch (cause) {
       check()
       if (controller.signal.reason?.name === 'TimeoutError') {
+        cause = controller.signal.reason
         status = 408; message = '原图读取超时，图片生成记录已保留，请重试保存图片。'
       }
       if (!retryable || attempt >= 2 || expired) throw Object.assign(new Error(message, { cause }), { status })

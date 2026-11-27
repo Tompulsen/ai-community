@@ -232,6 +232,41 @@ test('an interrupted original body retries and persistent network failure suppor
   expect(state.generations).toBe(1)
 })
 
+for (const stage of ['headers', 'body', 'cancel']) test(`a non-cooperative original ${stage} releases browser saving and supports retry without generation`, async ({ page }) => {
+  const { state, image } = await fixture(page)
+  await page.evaluate(stage => {
+    const originalFetch = window.fetch, timeout = window.setTimeout.bind(window)
+    ;(window as any).stuckOriginal = true
+    ;(window as any).originalAttempts = 0
+    window.setTimeout = ((handler: TimerHandler, ms?: number, ...args: any[]) => timeout(handler, ms && ms >= 30000 ? ms / 200 : ms, ...args)) as typeof setTimeout
+    window.fetch = async (...args) => {
+      const url = new URL(String(args[0]), location.href)
+      if ((window as any).stuckOriginal && url.pathname === '/api/creation/media' && !url.searchParams.has('variant')) {
+        ;(window as any).originalAttempts++
+        if (stage === 'headers') return new Promise<Response>(() => {})
+        return new Response(new ReadableStream({
+          start(controller) { if (stage === 'cancel') controller.enqueue(new Uint8Array([1])) },
+          cancel() { return new Promise<void>(() => {}) },
+        }), { status: stage === 'cancel' ? 502 : 200, headers: { 'Content-Type': 'image/jpeg' } })
+      }
+      return originalFetch(...args)
+    }
+  }, stage)
+  await send(page)
+  const status = page.locator('.browser-save')
+  await expect(status).toHaveClass(/failed/, { timeout: 10000 })
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  expect(await page.evaluate(() => (window as any).originalAttempts)).toBeGreaterThanOrEqual(3)
+  expect((await storedImages(page)).sizes).toEqual([])
+  await page.evaluate(() => { (window as any).stuckOriginal = false })
+  await status.getByRole('button', { name: '重试保存图片', exact: true }).click()
+  await expect(status).toHaveText('图片已保存到此浏览器')
+  expect((await storedImages(page)).sizes).toEqual([image.length])
+  await expect.poll(() => page.locator('.creation-image-preview img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0)
+  expect(state.generations).toBe(1)
+  expect(state.downloads).toBe(0)
+})
+
 test('quota failure cannot commit a local pointer and retry can finish the same generation', async ({ page }) => {
   await fixture(page)
   await page.evaluate(() => {
