@@ -318,8 +318,8 @@ test('review settings save publishing, suspension and refresh options without ov
   fixture.state.config.communityModelTypes = [{ id: 'keep-model', kind: 'video' }]
   await page.goto('/admin?tab=review')
   const settings = page.getByRole('region', { name: '审核设置', exact: true })
-  await expect(settings.getByRole('radio', { name: /^先审后发/ })).toBeChecked()
-  await settings.getByRole('radio', { name: /^先发后审/ }).check()
+  await expect(settings.getByText('用户准备发布或发送作品时才初审，正常生成不触发审核。', { exact: true })).toBeVisible()
+  await expect(settings.getByRole('radio')).toHaveCount(0)
   await settings.getByLabel('违规次数阈值', { exact: true }).fill('5')
   await settings.getByRole('switch', { name: '达到阈值自动封禁' }).uncheck()
   await settings.getByRole('combobox', { name: '首页推荐排序', exact: true }).selectOption('latest')
@@ -327,23 +327,22 @@ test('review settings save publishing, suspension and refresh options without ov
   await settings.getByRole('switch', { name: '手机下拉刷新' }).uncheck()
   await settings.getByRole('button', { name: '保存审核设置', exact: true }).click()
   await expect(settings.getByRole('status')).toContainText('修改已保存')
-  expect(fixture.writes[0]!.body).toEqual({ version: 'version-1', communityPublicationMode: 'after', communityAutoBanEnabled: false,
+  expect(fixture.writes[0]!.body).toEqual({ version: 'version-1', communityPublicationMode: 'before', communityAutoBanEnabled: false,
     communityViolationThreshold: 5, communityFeedMode: 'latest', communityFeedPoolSize: 300, communityPullToRefresh: false,
     communityModeration: { enabled: false, sensitiveWords: [], reviewThreshold: 0.65, rejectThreshold: 0.95 },
     communityFeedWeights: { interest: 60, fresh: 25, explore: 15 } })
   expect(fixture.state.config.communityModelTypes).toEqual([{ id: 'keep-model', kind: 'video' }])
   expect(fixture.state.config.uploadLimits.image).toBe(20)
   await page.reload()
-  await expect(settings.getByRole('radio', { name: /^先发后审/ })).toBeChecked()
+  await expect(settings.getByText(/普通作品初审通过后，提交即公开/)).toBeVisible()
   await expect(settings.getByLabel('违规次数阈值', { exact: true })).toHaveValue('5')
   await expect(settings.getByRole('switch', { name: '达到阈值自动封禁' })).not.toBeChecked()
-  await settings.getByRole('radio', { name: /^先审后发/ }).check()
   await settings.getByRole('switch', { name: '达到阈值自动封禁' }).check()
   await settings.getByRole('button', { name: '保存审核设置', exact: true }).click()
   await expect.poll(() => fixture.writes.length).toBe(2)
   expect(fixture.writes[1]!.body).toMatchObject({ version: 'version-2', communityPublicationMode: 'before', communityAutoBanEnabled: true })
   await openTab(page, '社区设置')
-  await expect(page.getByRole('combobox', { name: '内容发布方式', exact: true })).toHaveValue('before')
+  await expect(page.getByRole('combobox', { name: '内容发布方式', exact: true })).toHaveCount(0)
   await expect(page.getByLabel('违规次数阈值', { exact: true })).toHaveValue('5')
 })
 
@@ -381,14 +380,14 @@ test('model moderation thresholds validate ordering, persist values and retain c
   fixture.state.config.communityModeration.sensitiveWords = ['保留词']
   await page.goto('/admin?tab=review')
   const settings = page.getByRole('region', { name: '审核设置', exact: true })
-  const review = settings.getByLabel('疑似转人工阈值', { exact: true }), reject = settings.getByLabel('拒绝发布阈值', { exact: true })
+  const review = settings.getByLabel('疑似风险拦截阈值', { exact: true }), reject = settings.getByLabel('拒绝发布阈值', { exact: true })
   const save = settings.getByRole('button', { name: '保存审核设置', exact: true })
   await expect(review).toHaveValue('0.65'); await expect(reject).toHaveValue('0.95')
   await expect(settings.getByText(/分数越高风险越高，阈值越低越严格/)).toBeVisible()
   for (const [reviewValue, rejectValue] of [['0', '0.95'], ['0.65', '1.01'], ['0.95', '0.95'], ['0.9', '0.8'], ['', '0.95']]) {
     await review.fill(reviewValue!); await reject.fill(rejectValue!)
     await expect(review).toHaveAttribute('aria-invalid', 'true')
-    await expect(settings.getByRole('alert')).toContainText('疑似转人工阈值 < 拒绝发布阈值')
+    await expect(settings.getByRole('alert')).toContainText('疑似风险拦截阈值 < 拒绝发布阈值')
     await expect(save).toBeDisabled()
   }
   expect(fixture.writes).toHaveLength(0)
@@ -467,7 +466,7 @@ test('failed review settings can reload and moderators can review without readin
   await expect(page.getByRole('button', { name: '保存审核设置', exact: true })).toHaveCount(0)
   fixture.state.failRead = ''
   await page.getByRole('button', { name: '刷新审核设置', exact: true }).click()
-  await expect(page.getByRole('radio', { name: /^先审后发/ })).toBeChecked()
+  await expect(page.getByRole('switch', { name: '启用自动内容审核' })).not.toBeChecked()
   fixture.account.state.user.isAdmin = false; fixture.account.state.user.isModerator = true
   const privileged: string[] = []
   page.on('request', request => { if (new URL(request.url()).pathname === '/api/admin/community/config') privileged.push(request.url()) })
@@ -527,14 +526,14 @@ for (const colorScheme of ['light', 'dark'] as const) test(`review policy layout
     await page.setViewportSize({ width, height: 1000 })
     await page.goto('/admin?tab=review')
     const policy = page.getByRole('region', { name: '审核设置', exact: true })
-    await expect(policy.getByRole('radio', { name: /^先审后发/ })).toBeChecked()
+    await expect(policy.getByRole('switch', { name: '启用自动内容审核' })).not.toBeChecked()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-    await policy.getByRole('radio', { name: /^先审后发/ }).focus()
-    await page.keyboard.press('ArrowRight')
-    await expect(policy.getByRole('radio', { name: /^先发后审/ })).toBeChecked()
+    await policy.getByRole('switch', { name: '启用自动内容审核' }).focus()
+    await page.keyboard.press('Space')
+    await expect(policy.getByRole('switch', { name: '启用自动内容审核' })).toBeChecked()
     await policy.getByRole('button', { name: '保存审核设置', exact: true }).click()
     await expect(policy.getByRole('status')).toContainText('修改已保存')
-    await policy.getByRole('radio', { name: /^先审后发/ }).check()
+    await policy.getByRole('switch', { name: '启用自动内容审核' }).uncheck()
     await policy.getByRole('button', { name: '保存审核设置', exact: true }).click()
     await expect(policy.getByRole('status')).toContainText('修改已保存')
     if (width !== 390) {

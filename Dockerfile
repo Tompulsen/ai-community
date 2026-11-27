@@ -8,6 +8,7 @@ COPY index.html tsconfig*.json vite.config.ts ./
 COPY src ./src
 COPY public ./public
 COPY server ./server
+COPY tests/fixtures/poster-black-intro.mp4 ./tests/fixtures/
 COPY shared ./shared
 COPY migration ./migration
 COPY tools/activate-welfare.ts ./tools/activate-welfare.ts
