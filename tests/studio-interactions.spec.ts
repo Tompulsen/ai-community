@@ -49,6 +49,77 @@ async function sendKey(page: Page, key: string) {
   await page.keyboard.press('Escape')
 }
 
+for (const touch of [false, true]) {
+  test.describe(touch ? 'compact touch attachments' : 'compact desktop attachments', () => {
+    test.use({ viewport: { width: touch ? 390 : 1440, height: 900 }, hasTouch: touch, isMobile: touch })
+    test('mixed attachments share a small row and preserve previews, removal and submission contents', async ({ page }, info) => {
+      const state = await fixture(page)
+      const audio = Buffer.alloc(16044)
+      audio.write('RIFF'); audio.writeUInt32LE(audio.length - 8, 4); audio.write('WAVEfmt ', 8)
+      audio.writeUInt32LE(16, 16); audio.writeUInt16LE(1, 20); audio.writeUInt16LE(1, 22)
+      audio.writeUInt32LE(8000, 24); audio.writeUInt32LE(16000, 28); audio.writeUInt16LE(2, 32); audio.writeUInt16LE(16, 34)
+      audio.write('data', 36); audio.writeUInt32LE(16000, 40)
+      await page.locator('.chat-composer').getByLabel('添加附件', { exact: true }).setInputFiles([
+        { name: 'first.jpg', mimeType: 'image/jpeg', buffer: state.image },
+        { name: 'portrait.mp4', mimeType: 'video/mp4', buffer: await readFile('tests/fixtures/portrait-preview.mp4') },
+        { name: 'voice.wav', mimeType: 'audio/wav', buffer: audio },
+        { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('素材说明') },
+        { name: 'last.jpg', mimeType: 'image/jpeg', buffer: state.image },
+      ])
+      const row = page.locator('.reference-list'), cards = row.locator('li')
+      await expect(cards).toHaveCount(5)
+      await expect(page.locator('.material-status')).toHaveCount(0)
+      expect(await cards.evaluateAll(elements => elements.map(element => element.getAttribute('data-attachment-kind')))).toEqual(['image', 'video', 'audio', 'file', 'image'])
+      const sizes = await cards.evaluateAll(elements => elements.map(element => { const rect = element.getBoundingClientRect(); return { width: rect.width, height: rect.height, top: rect.top } }))
+      expect(sizes.every(size => size.width === 64 && size.height === 64 && size.top === sizes[0]!.top)).toBe(true)
+      await expect(row.locator('[data-attachment-kind="video"] .attachment-duration')).toHaveText(/^\d+:\d{2}$/)
+      await expect(row.locator('[data-attachment-kind="audio"] .attachment-duration')).toHaveText('0:01')
+      const videoSource = await row.locator('video').getAttribute('src')
+      expect(videoSource).toMatch(/^blob:/)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      if (touch) expect(await row.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)
+      await page.screenshot({ path: info.outputPath('compact-attachments.png') })
+      for (const mode of ['dark', 'light']) {
+        await page.evaluate(mode => (window as any).communityAppearance.set({ mode }), mode)
+        await page.locator('.chat-composer').screenshot({ path: `.impeccable/review/compact-attachments/${touch ? 'mobile' : 'desktop'}-${mode}.png` })
+      }
+      if (touch) {
+        await page.setViewportSize({ width: 320, height: 900 })
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      }
+      await row.locator('[data-attachment-kind="video"] .reference-preview').click()
+      await expect(page.getByRole('dialog', { name: '附件预览', exact: true }).locator('video')).toBeVisible()
+      await page.keyboard.press('Escape')
+      await row.locator('[data-attachment-kind="audio"] .reference-preview').click()
+      const details = page.getByRole('dialog', { name: '附件详情', exact: true })
+      await expect(details.getByRole('button', { name: '关闭附件详情' })).toBeFocused()
+      await expect(details.locator('audio')).toHaveAttribute('controls', '')
+      await details.locator('audio').evaluate(async (element: HTMLAudioElement) => { await element.play() })
+      await expect.poll(() => details.locator('audio').evaluate((element: HTMLAudioElement) => element.currentTime)).toBeGreaterThan(0)
+      await page.keyboard.press('Escape')
+      await expect(page.locator('.attachment-details audio')).toHaveCount(0)
+      await row.locator('[data-attachment-kind="file"] .reference-preview').click()
+      await expect(details).toContainText('notes.txt')
+      await expect(details).toContainText('text/plain')
+      await page.keyboard.press('Escape')
+      const file = row.locator('[data-attachment-kind="file"]')
+      if (!touch) await file.hover()
+      await file.getByRole('button', { name: '移除附件 notes.txt', exact: true }).click()
+      await expect(cards).toHaveCount(4)
+      await page.getByRole('textbox', { name: '消息', exact: true }).fill('按顺序处理这些素材')
+      await page.getByRole('button', { name: '发送', exact: true }).click()
+      await expect.poll(() => state.calls.length).toBe(1)
+      const content = state.calls[0].chatOptions.messages.at(-1).content
+      // Existing text submission groups images first and samples video into frames.
+      expect(content.filter((part: any) => part.type === 'image_url')).toHaveLength(4)
+      expect(content.find((part: any) => part.type === 'input_audio').input_audio.data).toBe(audio.toString('base64'))
+      expect(content.some((part: any) => part.type === 'file')).toBe(false)
+      expect(await page.evaluate(async url => { try { return (await fetch(url!)).ok } catch { return false } }, videoSource)).toBe(false)
+      expect(state.errors).toEqual([])
+    })
+  })
+}
+
 test('text paste and file drop share preparation, preserve normal paste and submit both attachments', async ({ page }) => {
   const state = await fixture(page)
   const input = page.getByRole('textbox', { name: '消息', exact: true })
@@ -63,7 +134,7 @@ test('text paste and file drop share preparation, preserve normal paste and subm
     element.dispatchEvent(new DragEvent('dragenter', { dataTransfer: data, bubbles: true, cancelable: true }))
     element.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }))
   })
-  await expect(page.locator('.material-status li[data-file-status="ready"]')).toHaveCount(1)
+  await expect(page.locator('.reference-list li[data-attachment-kind="file"]')).toHaveCount(1)
   expect(await input.evaluate(element => {
     const data = new DataTransfer(); data.setData('text/plain', '普通文字')
     return element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))

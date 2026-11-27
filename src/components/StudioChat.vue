@@ -92,12 +92,8 @@ const uploading = computed(() => referenceLoading.value || materials.pending.val
 const waitingForMaterials = ref(false)
 let materialSubmission: AbortController | undefined
 let live = true
-const draftImages = computed(() => files.value.flatMap((file, index) => file.type.startsWith('image/') ? [{ name: file.name, url: file.content, index }] : []))
-const materialItems = computed(() => materials.snapshot.value.items.filter(item => item.status !== 'ready' || !item.type.startsWith('image/')))
-function removeDraftImage(index: number) {
-  const position = draftImages.value[index]?.index
-  if (position !== undefined) materials.removeAt(position)
-}
+const draftAttachments = computed(() => files.value.map(file => ({ name: file.name, url: file.content, type: file.type, size: file.size })))
+const materialItems = computed(() => materials.snapshot.value.items.filter(item => item.status !== 'ready'))
 watch([() => current.value?.id, () => session.user?.id, () => props.mode], () => materialSubmission?.abort())
 onBeforeUnmount(() => { live = false; materialSubmission?.abort() })
 const draftQuote = computed({ get: () => current.value?.draftQuote, set: value => { if (current.value) { current.value.draftQuote = value; void saveChats(true)?.catch(() => {}) } } })
@@ -570,7 +566,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
       <p v-if="mode === 'text' && creation.modelLaunchPending" class="muted" role="status">正在准备所选模型，请稍候…</p>
       <form v-if="mode === 'text'" :inert="Boolean(creation.modelLaunchPending) || undefined" class="chat-composer studio-composer" :aria-label="entryOnly ? '快捷创作' : undefined" @submit.prevent="send">
         <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />
-        <StudioReferenceAttachments :references="draftImages" :disabled="busy" @remove="removeDraftImage" />
+        <StudioReferenceAttachments :references="draftAttachments" :disabled="busy" @remove="materials.removeAt" />
         <label class="field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '消息' }}</span><textarea ref="composerElement" v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteFiles" /></label>
         <StudioMaterialStatus :items="materialItems" :disabled="busy" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
         <div class="studio-composer-tools">
