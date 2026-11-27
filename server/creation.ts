@@ -486,10 +486,13 @@ async function upstreamJson(ctx: RequestContext, req: AccountRequest, credential
 }
 
 async function taskResult(ctx: RequestContext, req: AccountRequest, kind: 'image' | 'video', id: string,
-  protocol: CreationTaskProtocol, svc: CreationServices, originalOwner?: TaskOwner) {
+  protocol: CreationTaskProtocol, requestedToken: string | null, svc: CreationServices, originalOwner?: TaskOwner) {
+  if (!['openai', 'sync', 'async', 'legacy', 'plugin', 'seedance', 'gemini', 'xai'].includes(protocol))
+    throw httpError(400, '任务协议无效。')
+  if (requestedToken !== null && (!/^[1-9]\d*$/.test(requestedToken) || !Number.isSafeInteger(Number(requestedToken))))
+    throw httpError(400, '原任务密钥编号无效。')
   const path = creationTaskPath(kind, id, protocol)
   const saved = await ctx.redis.get(taskKey(ctx, kind, id, protocol))
-  const requestedToken = ctx.url.searchParams.get('tokenId')
   const owner: TaskOwner | null = saved ? JSON.parse(saved) as TaskOwner : originalOwner ?? null
   if (owner?.expiresAt !== undefined && owner.expiresAt <= Date.now()) throw httpError(410, '任务记录已过期。')
   if (owner) {
@@ -736,17 +739,55 @@ function matchesRequest(ctx: RequestContext, fingerprint: unknown) {
     || fingerprint === hash(JSON.stringify({ body: ctx.body, group: ctx.req.headers['x-new-api-group'] ?? null, token: ctx.req.headers['x-new-api-token'] ?? null }))
     || fingerprint === hash(JSON.stringify(ctx.body))
 }
-async function readRequest(ctx: RequestContext, key: string) {
+async function readRequest(ctx: RequestContext, key: string, includeExpired = false) {
   if (requestStoreEnabled()) {
     const row = await readDurableRequest(ctx.db, key)
-    if (row) return Number(row.record.requestExpiresAt) > Date.now() ? row.record : undefined
+    if (row) return includeExpired || Number(row.record.requestExpiresAt) > Date.now() ? row.record : undefined
   }
   const stored = await ctx.redis.get(key)
   if (!stored) return
   const cached = JSON.parse(stored) as TrackedRequest
-  if (cached.requestExpiresAt !== undefined && cached.requestExpiresAt <= Date.now()) return
+  if (cached.requestExpiresAt !== undefined && cached.requestExpiresAt <= Date.now()) return includeExpired ? cached as unknown as Record<string, unknown> : undefined
   if (requestStoreEnabled()) return (await registerDurableRequest(ctx.db, key, cached.fingerprint, cached, cached.contractVersion ?? 1, true)).row.record
   return cached as unknown as Record<string, unknown>
+}
+async function readCreationRequest(ctx: RequestContext, req: AccountRequest, id: string, svc: CreationServices) {
+  const key = `community-next:creation:request:${accountNamespace(ctx)}:${id}`
+  const stored = await readRequest(ctx, key, true)
+  if (stored && expiredResult(stored as unknown as TrackedRequest)) throw httpError(404, '没有找到此请求记录。')
+  const original = stored ? await cachedResult(ctx, stored, key) : undefined
+  const owner = original ? { tokenId: original.tokenId, protocol: original.protocol,
+    hasWorkSkills: stored!.hasWorkSkills === true, expiresAt: stored!.requestExpiresAt as number | undefined } : undefined
+  if (stored?.kind === 'image' && stored.inlineImagesOmitted && original?.status === 'succeeded' && original.upstreamId) {
+    const recovered = await taskResult(ctx, req, 'image', original.upstreamId, original.protocol, String(original.tokenId), svc, owner)
+    return { ...recovered, requestId: id, ...(original.apiFormat ? { apiFormat: original.apiFormat } : {}) }
+  }
+  if (original && (stored!.background || stored!.tracking || stored!.imageSaving
+    || !['pending', 'indeterminate'].includes(original.status) || !original.upstreamId)) return original
+  const query = ctx.url.searchParams
+  if (!original && !['kind', 'upstreamId', 'protocol', 'tokenId'].some(field => query.has(field)))
+    throw httpError(404, '没有找到此请求记录。')
+  const kind = stored?.kind ?? query.get('kind'), upstreamId = original?.upstreamId ?? query.get('upstreamId')
+  const protocol = original?.protocol ?? query.get('protocol'), tokenId = original ? String(original.tokenId) : query.get('tokenId')
+  if (!['image', 'video'].includes(String(kind)) || !upstreamId || !protocol || !tokenId)
+    throw httpError(400, '原任务恢复信息不完整。')
+  const lease = randomUUID(), lock = `${key}:poll`
+  if (stored && await ctx.redis.set(lock, lease, 'PX', 120000, 'NX') !== 'OK') return original!
+  try {
+    if (stored) {
+      const latest = await readRequest(ctx, key, true)
+      if (JSON.stringify(latest) !== JSON.stringify(stored)) return latest ? cachedResult(ctx, latest, key) : original!
+    }
+    const row = stored && requestStoreEnabled() ? await readDurableRequest(ctx.db, key) : undefined
+    if (row && JSON.stringify(row.record) !== JSON.stringify(stored)) return cachedResult(ctx, row.record, key)
+    const recovered = await taskResult(ctx, req, kind as 'image' | 'video', upstreamId, protocol as CreationTaskProtocol, tokenId, svc, owner)
+    const result = { ...recovered, ...(original?.requestId ? { requestId: original.requestId } : {}), ...(original?.apiFormat ? { apiFormat: original.apiFormat } : {}) }
+    if (stored) await persistRequestResult(ctx.redis, key, { ...stored, result } as unknown as TrackedRequest,
+      ctx.filesRoot, 0, row ? { db: ctx.db, row } : undefined)
+    return result
+  } finally {
+    if (stored) await ctx.redis.eval('if redis.call("GET",KEYS[1])==ARGV[1] then return redis.call("DEL",KEYS[1]) else return 0 end', 1, lock, lease)
+  }
 }
 async function duplicateRequest(ctx: RequestContext) {
   const id = record(ctx.body) ? ctx.body.requestId : undefined
@@ -1277,14 +1318,7 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
     } else if (ctx.req.method === 'GET' && /^\/api\/creation\/requests\/[A-Za-z0-9_-]{1,128}$/.test(ctx.url.pathname)) {
       await rateLimit(ctx, 'tasks', 180)
       const id = ctx.url.pathname.split('/').pop()!
-      const stored = await readRequest(ctx, `community-next:creation:request:${accountNamespace(ctx)}:${id}`)
-      if (!stored) throw httpError(404, '没有找到此请求记录。')
-      const result = await cachedResult(ctx, stored, `community-next:creation:request:${accountNamespace(ctx)}:${id}`)
-      if (stored.kind === 'image' && stored.inlineImagesOmitted && result.status === 'succeeded' && result.upstreamId) {
-        const recovered = await taskResult(ctx, req, 'image', result.upstreamId, result.protocol, svc,
-          { tokenId: result.tokenId, protocol: result.protocol, hasWorkSkills: stored.hasWorkSkills === true, expiresAt: stored.requestExpiresAt as number })
-        ctx.json(200, { ...recovered, requestId: id, ...(result.apiFormat ? { apiFormat: result.apiFormat } : {}) })
-      } else ctx.json(200, result)
+      ctx.json(200, await readCreationRequest(ctx, req, id, svc))
     } else if (['GET', 'POST'].includes(ctx.req.method || '') && ctx.url.pathname === '/api/creation/models') {
       const management = ctx.url.searchParams.get('management') === '1'
       if (management) ctx.requireAdmin()
@@ -1341,9 +1375,7 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
       if (ctx.req.method !== 'GET' || !match) return false
       await rateLimit(ctx, 'tasks', 180)
       const protocol = ctx.url.searchParams.get('protocol') || 'openai'
-      if (!['openai', 'sync', 'async', 'legacy', 'plugin', 'seedance', 'gemini', 'xai'].includes(protocol))
-        throw httpError(400, '任务协议无效。')
-      ctx.json(200, await taskResult(ctx, req, match[1] as 'image' | 'video', decodeURIComponent(match[2]!), protocol as CreationTaskProtocol, svc))
+      ctx.json(200, await taskResult(ctx, req, match[1] as 'image' | 'video', decodeURIComponent(match[2]!), protocol as CreationTaskProtocol, ctx.url.searchParams.get('tokenId'), svc))
     }
     return true
   } catch (error) {

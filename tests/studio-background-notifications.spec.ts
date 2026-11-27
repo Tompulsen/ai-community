@@ -165,9 +165,9 @@ async function startImage(page: Page, prompt: string) {
 }
 
 async function leaveWorkbench(page: Page) {
-  const menu = page.getByRole('button', { name: '打开侧边栏', exact: true })
-  if (await menu.isVisible()) await menu.click()
-  await page.locator('.studio-sidebar').getByRole('link', { name: '探索社区', exact: true }).click()
+  const link = page.locator('.studio-sidebar').getByRole('link', { name: '探索社区', exact: true })
+  if (!await link.isVisible()) await page.getByRole('button', { name: '打开侧边栏', exact: true }).click()
+  await link.click()
   await expect(page).toHaveURL(/\/discover$/)
 }
 
@@ -176,7 +176,7 @@ async function completeImage(page: Page, prompt: string) {
     const path = performance.getEntriesByType('resource').map(entry => entry.name).filter(name => /\/src\/native-studio\.ts(?:\?|$)/.test(name)).at(-1)!
     const studio = await import(/* @vite-ignore */ path)
     return studio.creation.tasks.find(task => task.prompt === prompt)?.phase
-  }, prompt)).toBe('complete')
+  }, prompt), { timeout: 10000 }).toBe('complete')
 }
 
 test('previously completed history stays quiet in the community and after reload', async ({ page }) => {
@@ -219,7 +219,7 @@ for (const disconnect of [false, true]) test(`closing a new ${disconnect ? 'conn
     await page.getByRole('button', { name: '后台生成同款', exact: true }).click()
     await expect.poll(state.submissions).toBe(1)
     state.finish()
-    await expect(dock(page)).toContainText(disconnect ? '请求异常' : '生成失败')
+    await expect(dock(page)).toContainText(disconnect ? '结果待确认' : '生成失败')
     const close = dock(page).getByRole('button', { name: '关闭此提醒', exact: true })
     if (disconnect) {
       const bounds = await close.boundingBox()
@@ -363,7 +363,7 @@ test('a stopped task viewed in the workbench stays in history without a persiste
   const state = await fixture(page)
   let queries = 0
   await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'pending', upstreamId: 'paused-image', tokenId: 41, protocol: 'async', outputs: [] } }))
-  await page.route('**/api/creation/tasks/**', route => { queries++; return route.fulfill({ json: { status: 'pending', outputs: [] } }) })
+  await page.route('**/api/creation/requests/**', route => { queries++; return route.fulfill({ json: { status: 'pending', outputs: [] } }) })
   try {
     await startImage(page, '保留停止等待的任务')
     await expect.poll(() => queries).toBeGreaterThan(0)
@@ -547,7 +547,7 @@ for (const disconnect of [false, true]) test(`background ${disconnect ? 'connect
     await expect(page).toHaveURL(/\/work\/backgroundsource$/)
     await expect.poll(state.submissions).toBe(1)
     state.finish()
-    await expect(dock(page)).toContainText(disconnect ? '请求异常' : '生成失败')
+    await expect(dock(page)).toContainText(disconnect ? '结果待确认' : '生成失败')
     await expect(dock(page).getByRole('alert')).toBeVisible()
     await expect(dock(page).getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
     await expect(dock(page).locator('details')).toHaveCount(0)
@@ -571,4 +571,104 @@ test('switching accounts clears background task details', async ({ page }) => {
     await expect(dock(page)).toHaveCount(0)
     expect(state.submissions()).toBe(1)
   } finally { state.finish() }
+})
+
+for (const outcome of ['succeeded', 'failed'] as const) test(`the browser reads the unified ${outcome} result without a second gateway route`, async ({ page }) => {
+  const state = await fixture(page, '/work/backgroundsource', 'video')
+  let localQueries = 0, gatewayQueries = 0
+  await page.route('**/api/creation/generate', route => {
+    const body = route.request().postDataJSON()
+    state.requests.push(body)
+    return route.fulfill({ json: { status: 'pending', requestId: body.requestId, upstreamId: 'gateway-original', tokenId: 41, protocol: 'openai', outputs: [] } })
+  })
+  await page.route('**/api/creation/requests/**', route => {
+    localQueries++
+    const query = new URL(route.request().url()).searchParams
+    expect(query.get('upstreamId')).toBe('gateway-original')
+    expect(query.get('tokenId')).toBe('41')
+    return route.fulfill({ json: { status: outcome, outputs: outcome === 'succeeded' ? [{ url: 'https://media.example/gateway.mp4' }] : [],
+      ...(outcome === 'failed' ? { error: '网关原始失败原因' } : {}) } })
+  })
+  await page.route('**/api/creation/tasks/**', route => { gatewayQueries++; return route.abort() })
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
+  await page.getByRole('button', { name: '后台生成同款', exact: true }).click()
+  await expect(dock(page)).toContainText(outcome === 'succeeded' ? '生成完成' : '生成失败')
+  if (outcome === 'failed') await expect(dock(page)).toContainText('网关原始失败原因')
+  expect({ localQueries, gatewayQueries, submissions: state.requests.length }).toEqual({ localQueries: 1, gatewayQueries: 0, submissions: 1 })
+})
+
+for (const width of [390, 1440]) for (const outcome of ['succeeded', 'failed'] as const) test(`a missing video reminder closes and recovers the upstream ${outcome} result at ${width}px`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 900 })
+  const state = await fixture(page, '/work/backgroundsource', 'video')
+  let queries = 0, finished = false
+  await page.route('**/api/creation/generate', async route => {
+    state.requests.push(route.request().postDataJSON())
+    return route.fulfill({ json: { status: 'pending', upstreamId: 'missing-video', tokenId: 41, protocol: 'openai', outputs: [] } })
+  })
+  await page.route('**/api/creation/requests/**', route => {
+    queries++
+    if (finished) return route.fulfill({ json: { status: outcome, outputs: outcome === 'succeeded' ? [{ url: 'https://media.example/recovered.mp4' }] : [],
+      ...(outcome === 'failed' ? { error: '上游审核未通过：参考图不符合要求。' } : {}) } })
+    return route.fulfill({ status: 404, json: { message: '没有找到此请求记录。' } })
+  })
+  await page.clock.install()
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
+  await page.getByRole('button', { name: '后台生成同款', exact: true }).click()
+  await expect(dock(page)).toContainText('结果待确认')
+  await expect(dock(page)).not.toContainText('生成失败')
+  await expect(dock(page)).toContainText('1 项待查看')
+  await expect(dock(page)).not.toContainText('1/1')
+  await expect(dock(page).getByRole('button', { name: '关闭此提醒' })).toBeVisible()
+  await page.screenshot({ path: info.outputPath(`missing-task-${width}.png`) })
+  expect((await new AxeBuilder({ page }).include('.background-dock').analyze()).violations).toEqual([])
+  if (width === 390) {
+    await dock(page).getByRole('button', { name: '收起生成任务' }).click()
+    await expect(dock(page)).toHaveClass(/minimized/)
+  }
+  await page.clock.fastForward(8000)
+  await expect(dock(page)).toHaveCount(0)
+  expect(queries).toBe(1)
+  expect(state.requests).toHaveLength(1)
+  finished = true
+  await page.reload()
+  await expect(page.locator('.app-header')).toBeVisible()
+  if (outcome === 'succeeded') {
+    await expect(dock(page)).toContainText('生成完成')
+    await dock(page).getByRole('button', { name: '查看结果', exact: true }).click()
+  } else {
+    await expect(dock(page)).toHaveCount(0)
+    await page.goto(`/create/video?reuse=${state.requests[0].requestId}`)
+  }
+  expect(queries).toBe(2)
+  await expect(page.locator('.task-status')).toContainText(outcome === 'succeeded' ? '生成完成' : '生成失败')
+  if (outcome === 'failed') await expect(page.locator('.task-message')).toContainText('上游审核未通过：参考图不符合要求。')
+  expect(state.requests).toHaveLength(1)
+})
+
+test('closing a failed reminder leaves the running task and keeps the selected task stable', async ({ page }) => {
+  const state = await fixture(page, '/discover')
+  const path = await page.evaluate(() => performance.getEntriesByType('resource').map(entry => entry.name).filter(name => /\/src\/native-studio\.ts(?:\?|$)/.test(name)).at(-1)!)
+  await page.clock.install()
+  const update = async (action: 'seed' | 'fail' | 'insert') => page.evaluate(async ({ action, path }) => {
+    const { creation } = await import(/* @vite-ignore */ path)
+    const source = creation.tasks.find(task => task.id === 'already-completed')!
+    if (action === 'seed') creation.tasks.unshift(...['first', 'second'].map(id => ({ ...source, id, phase: 'running', prompt: id })))
+    if (action === 'fail') creation.tasks.find(task => task.id === 'second')!.phase = 'error'
+    if (action === 'insert') creation.tasks.unshift({ ...source, id: 'newest', phase: 'running', prompt: 'newest' })
+  }, { action, path })
+  await update('seed')
+  await expect(dock(page)).toContainText('2 项进行中')
+  await expect(dock(page).getByRole('button', { name: '关闭此提醒' })).toHaveCount(0)
+  await dock(page).getByRole('button', { name: '下一个任务' }).click()
+  await expect(dock(page).locator('.dock-content p')).toHaveText('second')
+  await update('insert')
+  await update('fail')
+  await expect(dock(page).locator('.dock-content p')).toHaveText('second')
+  await dock(page).getByRole('button', { name: '关闭此提醒' }).click()
+  await expect(dock(page)).toContainText('2 项进行中')
+  await page.clock.fastForward(16000)
+  await expect(dock(page)).toBeVisible()
+  expect(state.submissions()).toBe(0)
 })

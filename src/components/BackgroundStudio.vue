@@ -7,14 +7,14 @@ import { creation, initializeCreation, mediaSource, type CreationTask } from '..
 import { errorMessage, session } from '../state'
 
 const route = useRoute(), router = useRouter()
-const hidden = ref(false), index = ref(0), error = ref('')
+const hidden = ref(false), selectedId = ref(''), error = ref('')
 const unread = ref<string[]>([]), dock = ref<HTMLElement>(), handle = ref<HTMLButtonElement>()
 const point = ref<{ x: number; y: number }>(), dragging = ref(false)
 let pointer: { id: number; x: number; y: number; left: number; top: number; target: HTMLElement } | undefined
 const position = computed(() => point.value ? { left: `${point.value.x}px`, top: `${point.value.y}px`, right: 'auto', bottom: 'auto' } : {})
 const studioPage = computed(() => route.path === '/create' || route.path.startsWith('/create/'))
 const active = (phase: string) => ['submitting', 'running'].includes(phase)
-const labels = { submitting: '正在提交', running: '正在生成', complete: '生成完成', error: '生成失败', paused: '已停止等待', attention: '请求异常' }
+const labels = { submitting: '正在提交', running: '正在生成', complete: '生成完成', error: '生成失败', paused: '已停止等待', attention: '结果待确认' }
 const chatState = shallowRef<typeof import('../native-chat').chats>()
 watch(() => session.user?.id, async owner => {
   chatState.value = undefined
@@ -37,18 +37,26 @@ watch(() => ({
   phases: new Map(creation.tasks.filter(item => item.owner === session.user?.id).map(item => [item.id, item.phase])),
   restoring: new Set(creation.restoringTaskIds),
 }), (current, previous) => {
-  if (current.owner !== previous?.owner) { hidden.value = false; point.value = undefined; error.value = ''; stopDrag() }
+  if (current.owner !== previous?.owner) { hidden.value = false; selectedId.value = ''; point.value = undefined; error.value = ''; stopDrag() }
   if (!current.owner || current.owner !== previous?.owner || current.studio) unread.value = []
   else {
     const settled = [...current.phases].filter(([id, phase]) => !active(phase) && !current.restoring.has(id)
       && (active(previous?.phases.get(id) || '') || phase === 'complete' && previous?.restoring.has(id))).map(([id]) => id)
     unread.value = [...new Set([...unread.value, ...settled])].filter(id => current.phases.has(id))
   }
-  index.value = 0
 }, { immediate: true, flush: 'sync' })
 const tasks = computed(() => creation.tasks.filter(item => item.owner === session.user?.id && visible(item)
   && !creation.restoringTaskIds.has(item.id) && (active(item.phase) || unread.value.includes(item.id))))
-const task = computed(() => tasks.value[Math.min(index.value, tasks.value.length - 1)])
+const task = computed(() => tasks.value.find(item => item.id === selectedId.value) || tasks.value[0])
+const index = computed(() => tasks.value.findIndex(item => item.id === task.value?.id))
+const running = computed(() => tasks.value.filter(item => active(item.phase)).length)
+const summary = computed(() => [running.value ? `${running.value} 项进行中` : '', tasks.value.length - running.value ? `${tasks.value.length - running.value} 项待查看` : ''].filter(Boolean).join(' · '))
+watch(() => task.value?.id, id => { selectedId.value = id || ''; error.value = '' })
+watch(() => task.value && ['error', 'attention'].includes(task.value.phase) && !studioPage.value ? task.value.id : '', (id, _, cleanup) => {
+  if (!id) return
+  const timer = setTimeout(() => { void dismiss(id) }, 8000)
+  cleanup(() => clearTimeout(timer))
+})
 const progress = computed(() => typeof task.value?.progress === 'number' && Number.isFinite(task.value.progress) ? Math.max(0, Math.min(100, task.value.progress)) : undefined)
 async function open(value: CreationTask) {
   const owner = session.user?.id
@@ -93,10 +101,11 @@ function moveByKey(event: KeyboardEvent) {
   event.preventDefault(); point.value = clamp(rect.left + step[0], rect.top + step[1])
 }
 async function toggle() { hidden.value = !hidden.value; stopDrag(); await nextTick(); resize(); handle.value?.focus() }
-async function dismiss(value: CreationTask) {
-  unread.value = unread.value.filter(id => id !== value.id)
-  index.value = 0; error.value = ''; stopDrag()
-  await nextTick(); handle.value?.focus()
+async function dismiss(id: string) {
+  const focused = dock.value?.contains(document.activeElement)
+  unread.value = unread.value.filter(value => value !== id)
+  error.value = ''; stopDrag()
+  await nextTick(); resize(); if (focused) handle.value?.focus()
 }
 const observer = new ResizeObserver(resize)
 watch(dock, element => { observer.disconnect(); if (element) observer.observe(element) }, { flush: 'post' })
@@ -108,14 +117,15 @@ onBeforeUnmount(() => { stopDrag(); observer.disconnect(); window.removeEventLis
   <aside v-if="session.user && task && !studioPage" ref="dock" class="background-dock" :class="{ minimized: hidden, dragging }" :style="position" aria-label="后台生成任务">
     <div class="dock-heading">
       <button ref="handle" class="icon-button dock-drag" aria-label="拖动生成小窗" title="拖动移动，也可用方向键移动" @pointerdown="startDrag" @pointermove="moveDrag" @pointerup="stopDrag" @pointercancel="stopDrag" @lostpointercapture="stopDrag" @keydown="moveByKey"><Grip :size="18" /></button>
-      <button v-if="hidden" class="dock-restore" aria-label="展开生成任务" @click="toggle"><span>{{ labels[task.phase] }}</span><span class="caption-5">{{ tasks.length }} 个任务</span></button>
-      <template v-else><strong>后台生成 · {{ index + 1 }}/{{ tasks.length }}</strong><button v-if="active(task.phase)" class="icon-button" aria-label="收起生成任务" title="隐藏小窗，生成继续" @click="toggle"><Minus :size="18" /></button><button v-else class="icon-button" aria-label="关闭此提醒" title="关闭提醒，任务记录仍可在创作台查看" @click="dismiss(task)"><X :size="18" /></button></template>
+      <button v-if="hidden" class="dock-restore" aria-label="展开生成任务" :aria-expanded="false" @click="toggle"><span>{{ labels[task.phase] }}</span><span class="caption-5">{{ summary }}</span></button>
+      <template v-else><div class="dock-title"><strong>后台生成</strong><span class="caption-5 muted">{{ summary }}</span></div><button class="icon-button" aria-label="收起生成任务" :aria-expanded="true" title="隐藏小窗，生成继续" @click="toggle"><Minus :size="18" /></button><button v-if="!active(task.phase)" class="icon-button" aria-label="关闭此提醒" title="关闭提醒，任务记录保留在工作台" @click="dismiss(task.id)"><X :size="18" /></button></template>
     </div>
     <template v-if="!hidden">
-      <div class="dock-content" role="status" aria-live="polite"><CheckCircle2 v-if="task.phase === 'complete'" :size="20" /><LoaderCircle v-else-if="active(task.phase)" :size="20" /><CircleAlert v-else :size="20" /><div><strong>{{ labels[task.phase] }}<span v-if="progress !== undefined && task.phase === 'running'"> · {{ Math.round(progress) }}%</span></strong><p>{{ task.prompt || task.model }}</p><span class="caption-5 muted">{{ task.model }}</span></div></div>
+      <div class="dock-content" role="status"><CheckCircle2 v-if="task.phase === 'complete'" :size="20" aria-hidden="true" /><LoaderCircle v-else-if="active(task.phase)" :size="20" aria-hidden="true" /><CircleAlert v-else :size="20" aria-hidden="true" /><div><strong>{{ labels[task.phase] }}<span v-if="progress !== undefined && task.phase === 'running'"> · {{ Math.round(progress) }}%</span></strong><p>{{ task.prompt || task.model }}</p><span class="caption-5 muted">{{ task.model }}</span></div></div>
       <button v-if="task.kind === 'image' && task.phase === 'complete' && task.urls[0]" class="dock-preview" aria-label="打开生成结果" @click="open(task)"><img :src="mediaSource(task.urls[0], true)" alt="本次生成的图片" /></button>
       <p v-if="error || task.error && !active(task.phase)" class="dock-error" :class="task.phase === 'paused' ? 'muted' : 'form-error'" :role="task.phase === 'paused' ? 'status' : 'alert'">{{ error || task.error }}</p>
-      <div class="dock-actions"><button class="button primary btn" @click="open(task)">{{ task.phase === 'complete' ? '查看结果' : '查看任务' }}<ArrowUpRight :size="15" /></button><template v-if="tasks.length > 1"><button class="icon-button" aria-label="上一个任务" @click="index = (index + tasks.length - 1) % tasks.length"><ChevronLeft :size="18" /></button><button class="icon-button" aria-label="下一个任务" @click="index = (index + 1) % tasks.length"><ChevronRight :size="18" /></button></template></div>
+      <p v-if="task.phase === 'error' || task.phase === 'attention'" class="dock-note caption-5 muted">{{ task.phase === 'attention' ? '尚未确认生成结果，可在工作台查询原任务。此提醒稍后自动关闭。' : '记录已保留在工作台，此提醒稍后自动关闭。' }}</p>
+      <div class="dock-actions"><button class="button primary btn" @click="open(task)">{{ task.phase === 'complete' ? '查看结果' : '查看任务' }}<ArrowUpRight :size="15" /></button><template v-if="tasks.length > 1"><span class="dock-page caption-5 muted">第 {{ index + 1 }} / {{ tasks.length }} 项</span><button class="icon-button" aria-label="上一个任务" @click="selectedId = tasks[(index + tasks.length - 1) % tasks.length]!.id"><ChevronLeft :size="18" /></button><button class="icon-button" aria-label="下一个任务" @click="selectedId = tasks[(index + 1) % tasks.length]!.id"><ChevronRight :size="18" /></button></template></div>
     </template>
   </aside>
 </template>
@@ -125,11 +135,13 @@ onBeforeUnmount(() => { stopDrag(); observer.disconnect(); window.removeEventLis
 .background-dock.minimized { width: auto; max-width: calc(100vw - 16px); }
 .dock-heading { display: flex; align-items: center; gap: 4px; padding: 4px; border-bottom: 1px solid var(--border); }
 .minimized .dock-heading { border: 0; }
-.dock-heading strong { flex: 1; font-size: 14px; }
+.dock-title { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 2px; }
+.dock-heading strong { font-size: 14px; }
+.dock-title > span { font-size: 12px; }
 .background-dock .icon-button { width: 44px; height: 44px; flex-shrink: 0; }
 .dock-drag { touch-action: none; cursor: grab; user-select: none; }
 .dragging .dock-drag { cursor: grabbing; }
-.dock-restore { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px 0 4px; }
+.dock-restore { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 44px; padding: 0 12px 0 4px; }
 .dock-content { display: flex; align-items: flex-start; gap: 12px; padding: 16px; }
 .dock-content > svg { flex: none; }
 .dock-content > div { min-width: 0; }
@@ -138,6 +150,8 @@ onBeforeUnmount(() => { stopDrag(); observer.disconnect(); window.removeEventLis
 .dock-content .muted { overflow-wrap: anywhere; }
 .dock-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 0 12px 12px; }
 .dock-actions .button { min-height: 44px; }
+.dock-page { margin-left: auto; }
+.dock-note { margin: 0 16px 12px; }
 .dock-preview { display: block; margin: 0 16px 12px; width: calc(100% - 32px); }
 .dock-preview img { display: block; width: 100%; max-height: 180px; object-fit: contain; }
 .dock-error { margin: 0 16px 12px; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }

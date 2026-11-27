@@ -527,39 +527,30 @@ function mediaPathUrl(value: unknown, task: Pick<CreationTask, 'tokenId' | 'kind
   if (task.tokenId != null) query.set('tokenId', String(task.tokenId))
   return `/api/creation/media?${query}`
 }
-function resultData(value: unknown): Record<string, unknown> {
-  if (!record(value)) return {}
-  if (record(value.data) && !Array.isArray(value.data)) return { ...value, ...value.data }
-  return value
-}
 function resultUrls(data: Record<string, unknown>, task: CreationTask): string[] {
-  const rows = Array.isArray(data.outputs) ? data.outputs : Array.isArray(data.data) ? data.data : Array.isArray(data.output) ? data.output : []
-  const nested = [data.output, data.result, data.video].filter(record)
-  const values: unknown[] = [data.url, data.video_url, mediaPathUrl(data.mediaPath, task), ...nested.map(item => item.url)]
+  const rows = Array.isArray(data.outputs) ? data.outputs : []
+  const values: unknown[] = [mediaPathUrl(data.mediaPath, task)]
   for (const row of rows) {
-    if (record(row)) values.push(row.url, row.video_url, typeof row.b64_json === 'string' ? `data:image/png;base64,${row.b64_json}` : undefined)
-    else values.push(row)
+    if (record(row)) values.push(row.url, typeof row.b64_json === 'string' ? `data:image/png;base64,${row.b64_json}` : undefined)
   }
   return [...new Set(values.map(safeResultUrl).filter((url): url is string => Boolean(url)))]
 }
 function resultText(data: Record<string, unknown>): string {
-  if (typeof data.text === 'string') return data.text
   if (Array.isArray(data.outputs)) return data.outputs.filter(record).flatMap(item => typeof item.text === 'string' ? [item.text] : []).join('\n')
-  const choice = Array.isArray(data.choices) ? data.choices[0] : undefined
-  return record(choice) && record(choice.message) && typeof choice.message.content === 'string' ? choice.message.content : ''
+  return ''
 }
 function applyStage(task: CreationTask, data: Record<string, unknown>) {
   task.stage = data.status === 'pending' && ['preparing', 'queued', 'generating', 'saving', 'downloading'].includes(String(data.stage)) ? data.stage as CreationTask['stage'] : undefined
   task.stageStartedAt = task.stage && typeof data.stageStartedAt === 'number' && Number.isFinite(data.stageStartedAt) ? data.stageStartedAt : undefined
 }
 function applyResult(task: CreationTask, value: unknown): boolean {
-  const data = resultData(value)
+  const data = record(value) ? value : {}
   task.settledAt = Date.now()
   if (typeof data.reasoning === 'string') task.reasoning = data.reasoning
   if (task.kind === 'video' && typeof data.poster === 'string') task.poster = safeResultUrl(data.poster)
   if (record(data.usage)) task.usage = data.usage as ChatResponseUsage
   if (Array.isArray(data.toolCalls)) task.toolCalls = data.toolCalls as StudioToolCall[]
-  const status = String(data.status || data.state || '').toLowerCase()
+  const status = typeof data.status === 'string' ? data.status : ''
   task.resultStatus = ['pending', 'succeeded', 'failed', 'indeterminate', 'save_failed', 'expired'].includes(status) ? status as CreationTask['resultStatus'] : undefined
   if (typeof data.deadline === 'number' && Number.isFinite(data.deadline)) task.deadline = data.deadline
   applyStage(task, { ...data, status })
@@ -570,19 +561,23 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   if (apiFormat && apiFormat !== 'auto') task.apiFormat = apiFormat
   const urls = resultUrls(data, task), text = resultText(data)
   if (task.kind === 'text' && text) task.text = text
-  const id = data.upstreamId || data.task_id || data.id || data.taskId
+  const id = data.upstreamId
   if (task.serverTracked || validUpstreamId(id) || status || urls.length || text || task.toolCalls?.length) task.submissionError = undefined
   if (validUpstreamId(id) && (status || !urls.length && !text)) task.upstreamId = id
-  const progress = typeof data.progress === 'string' ? Number(data.progress.replace('%', '')) : data.progress
+  const progress = data.progress
   if (typeof progress === 'number' && Number.isFinite(progress)) task.progress = Math.max(0, Math.min(100, progress))
   const insufficient = ['failed', 'error', 'indeterminate'].includes(status) && isInsufficientCredits(data)
   const busy = ['failed', 'error', 'indeterminate'].includes(status) && isModelBusy(data)
   if (insufficient && task.errorCode !== insufficientCreditsCode) void refreshAccountBalance(true)
   task.errorCode = insufficient ? insufficientCreditsCode : busy ? modelBusyCode : typeof data.errorCode === 'string' ? generationErrorCode : undefined
   const detail = insufficient ? insufficientCreditsMessage : busy ? modelBusyMessage + (status === 'indeterminate' ? ' 本次未完整生成，请先核对消费记录。' : '')
-    : typeof data.error === 'string' ? data.error : record(data.error) && typeof data.error.message === 'string' ? data.error.message : ''
+    : typeof data.error === 'string' ? data.error : ''
   task.errorStage = typeof data.errorStage === 'string' ? data.errorStage : undefined
   task.errorStatus = typeof data.errorStatus === 'number' ? data.errorStatus : undefined
+  if (!['pending', 'succeeded', 'failed', 'save_failed', 'indeterminate', 'expired'].includes(status)) {
+    task.phase = 'attention'; task.error = '社区返回了无法识别的任务状态，原记录已保留。'
+    return true
+  }
   if (['save_failed', 'indeterminate', 'expired'].includes(status)) {
     task.toolCalls = undefined
     task.phase = 'attention'
@@ -592,19 +587,19 @@ function applyResult(task: CreationTask, value: unknown): boolean {
     }
     return true
   }
-  if (['failed', 'cancelled', 'canceled', 'error'].includes(status)) {
+  if (status === 'failed') {
     task.toolCalls = undefined
     task.phase = 'error'
     task.error = detail || '上游任务未成功完成。'
     return true
   }
-  if ((urls.length || text || task.toolCalls?.length) && (!status || ['complete', 'completed', 'success', 'succeeded'].includes(status))) {
+  if ((urls.length || text || task.toolCalls?.length) && status === 'succeeded') {
     task.urls = urls; task.text = text; task.phase = 'complete'; task.progress = 100; task.error = ''
     if (task.kind === 'image') void cacheCreationImages(task)
     if (task.kind !== 'text') void autoDownloadCreation(task)
     return true
   }
-  if (['complete', 'completed', 'success', 'succeeded'].includes(status)) {
+  if (status === 'succeeded') {
     task.phase = 'attention'; task.error = detail || '上游任务已结束，但未返回可读取的结果，记录已保留。'
     return true
   }
@@ -663,7 +658,7 @@ function monitorSubmission(task: CreationTask, controller: AbortController, vers
       try {
         const value = await queryCreationTask(`/api/creation/requests/${encodeURIComponent(task.id)}`, task, monitoring, version)
         if (monitoring.signal.aborted || epoch !== version || task.owner !== activeOwner()) return
-        const data = resultData(value)
+        const data = record(value) ? value : {}
         // The POST remains authoritative; this read only reveals its preparation stage.
         if (data.requestId === task.id && data.status === 'pending') {
           applyStage(task, data)
@@ -685,13 +680,14 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
   let firstRead = true
   while (!controller.signal.aborted && epoch === version && (firstRead || Date.now() < deadline)) {
     firstRead = false
-    const query = new URLSearchParams({ protocol: task.protocol })
-    if (task.tokenId != null) query.set('tokenId', String(task.tokenId))
+    const query = new URLSearchParams()
+    if (task.upstreamId && task.kind !== 'text') {
+      query.set('kind', task.kind); query.set('upstreamId', task.upstreamId); query.set('protocol', task.protocol)
+      if (task.tokenId != null) query.set('tokenId', String(task.tokenId))
+    }
     let data: unknown
     try {
-      const path = task.serverTracked || !task.upstreamId ? `/api/creation/requests/${encodeURIComponent(task.id)}`
-        : `/api/creation/tasks/${task.kind}/${encodeURIComponent(task.upstreamId)}?${query}`
-      data = await queryCreationTask(path, task, controller, version)
+      data = await queryCreationTask(`/api/creation/requests/${encodeURIComponent(task.id)}${query.size ? `?${query}` : ''}`, task, controller, version)
       failures = 0; rateLimited = 0
     } catch (error) {
       if (epoch !== version || controller.signal.aborted) return

@@ -545,6 +545,7 @@ test('request state expires in three days and expired Redis cannot resurrect the
   assert.equal((await f.app.inject('/api/creation/requests/passthrough')).json().status, 'succeeded')
   now = expires
   assert.equal((await f.app.inject('/api/creation/requests/passthrough')).statusCode, 404)
+  assert.equal((await f.app.inject('/api/creation/requests/passthrough?kind=image&upstreamId=expired&protocol=async&tokenId=71')).statusCode, 404)
   await cleanupCreationRequests(f.redis, f.db, f.filesRoot)
   assert.equal(await f.row(), undefined); assert.equal(f.values.has(row.key), false)
   f.values.set(row.key, oldRedis)
@@ -1781,7 +1782,7 @@ test('automatic video resolution uses the administrator setting while explicit a
 test('changed video settings apply to new requests while original IDs only return their cached results', async t => {
   const modelTypes = [{ id: 'wan3.0', kind: 'video', video: { autoResolution: '480p', resolutions: ['480p', '720p', '1080p'] } }]
   const { app, calls } = fixture(t, {
-    modelTypes, fetch() { return Response.json({ id: `resolution-job-${calls.length}`, status: 'queued' }) },
+    modelTypes, fetch(url, init) { return Response.json({ id: init.method === 'POST' ? `resolution-job-${calls.filter(call => call.init.method === 'POST').length}` : new URL(url).pathname.split('/').at(-1), status: 'queued' }) },
   })
   const input = { kind: 'video', model: 'wan3.0', prompt: 'Video', duration: 8, size: 'auto', requestId: 'fixed-resolution',
     videoOptions: { mode: 'text-to-video', resolution: 'auto' } }
@@ -1790,11 +1791,11 @@ test('changed video settings apply to new requests while original IDs only retur
   modelTypes[0].video.autoResolution = '1080p'
   assert.deepEqual((await submit(app, input)).json(), first.json())
   assert.deepEqual((await app.inject('/api/creation/requests/fixed-resolution')).json(), first.json())
-  assert.equal(calls.length, 1)
+  assert.equal(calls.filter(call => call.init.method === 'POST').length, 1)
   const next = await submit(app, { ...input, requestId: 'new-resolution' })
   assert.equal(next.statusCode, 200, next.payload)
-  assert.equal(calls.length, 2)
-  const resolutions = await Promise.all(calls.map(async ({ init }) => {
+  assert.equal(calls.filter(call => call.init.method === 'POST').length, 2)
+  const resolutions = await Promise.all(calls.filter(call => call.init.method === 'POST').map(async ({ init }) => {
     const body = await relayRequestBody(init)
     const metadata = typeof body.metadata === 'string' ? JSON.parse(body.metadata) : body.metadata
     return body.resolution ?? metadata?.resolution
@@ -2445,16 +2446,16 @@ for (const failedMapping of ['task', 'media']) {
     }
     const assertOwnership = () => {
       const saved = [...values].filter(([key]) => /community-next:creation:(?:task|media):/.test(key))
-      assert.equal(saved.length, failedMapping === 'task' ? 1 : 2)
+      assert.equal(saved.length, 2)
       assert(saved.every(([, value]) => JSON.parse(value).tokenId === 71))
     }
     clearOwnership()
     const recovered = await app.inject(`/api/creation/requests/${input.requestId}`)
     assert.equal(recovered.statusCode, 200)
-    assert.deepEqual(recovered.json(), created.json())
+    assert.equal(recovered.json().status, 'succeeded')
     assertOwnership()
     clearOwnership()
-    assert.deepEqual((await submit(app, input)).json(), created.json())
+    assert.deepEqual((await submit(app, input)).json(), recovered.json())
     assertOwnership()
     const resolved = await app.inject('/api/creation/tasks/video/paid_job?protocol=openai')
     assert.equal(resolved.statusCode, 200)
@@ -2920,3 +2921,74 @@ test('private media errors stay redacted through background polling, cached reco
   assert(!JSON.stringify([...f.values.values()]).includes(secret));
   assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1);
 });
+
+test('the request endpoint owns gateway recovery and preserves upstream success and failure', async t => {
+  for (const status of ['completed', 'failed']) await t.test(status, async t => {
+    const { app, calls, credentialCalls } = fixture(t, { fetch(_url, init) {
+      assert.equal(init.method, undefined)
+      return Response.json({ id: 'original-job', status, user_id: 17,
+        ...(status === 'failed' ? { fail_reason: '供应商原始失败原因' } : { video_url: 'https://media.example/original.mp4' }) })
+    } })
+    const result = await app.inject('/api/creation/requests/local-id?kind=video&upstreamId=original-job&protocol=openai&tokenId=71')
+    assert.equal(result.statusCode, 200, result.payload)
+    assert.equal(result.json().status, status === 'failed' ? 'failed' : 'succeeded')
+    if (status === 'failed') assert.match(result.json().error, /生成服务未能完成本次技能调用/)
+    assert.equal(credentialCalls[0].tokenId, 71)
+    assert.deepEqual(calls.map(call => call.path), ['/v1/videos/original-job'])
+  })
+})
+
+test('the unified request endpoint refreshes legacy pending tasks with server-owned identity and caches the result', async t => {
+  let token = 71
+  const { app, calls, credentialCalls } = fixture(t, { selectedToken: () => token, fetch(_url, init) {
+    return Response.json({ id: 'original-job', status: init.method === 'POST' ? 'queued' : 'completed', user_id: 17,
+      ...(init.method === 'POST' ? {} : { video_url: 'https://media.example/original.mp4' }) })
+  } })
+  const created = await submit(app, { kind: 'video', model: 'sora-2', duration: 8, prompt: 'Video', requestId: 'original-request' })
+  assert.equal(created.json().status, 'pending')
+  token = 99
+  const resolved = await app.inject('/api/creation/requests/original-request?kind=image&upstreamId=wrong-job&protocol=async&tokenId=99')
+  assert.equal(resolved.json().status, 'succeeded', resolved.payload)
+  assert.equal(credentialCalls.at(-1).tokenId, 71)
+  assert.equal(calls.at(-1).path, '/v1/videos/original-job')
+  const before = calls.length
+  assert.deepEqual((await app.inject('/api/creation/requests/original-request')).json(), resolved.json())
+  assert.equal(calls.length, before)
+  assert.equal(calls.filter(call => call.init.method === 'POST').length, 1)
+})
+
+test('unified recovery rejects incomplete, malformed and foreign gateway identity', async t => {
+  const { app, calls } = fixture(t, { fetch() { return Response.json({ id: 'foreign-job', status: 'completed', user_id: 18 }) } })
+  for (const query of ['kind=video&upstreamId=foreign-job&protocol=openai',
+    'kind=video&upstreamId=foreign-job&protocol=invalid&tokenId=71',
+    'kind=text&upstreamId=foreign-job&protocol=openai&tokenId=71',
+    'kind=video&upstreamId=..%2Fprivate&protocol=openai&tokenId=71',
+    'kind=video&upstreamId=foreign-job&protocol=openai&tokenId=-1']) {
+    const result = await app.inject(`/api/creation/requests/local-id?${query}`)
+    assert.equal(result.statusCode, 400, result.payload)
+  }
+  assert.equal(calls.length, 0)
+  const result = await app.inject('/api/creation/requests/local-id?kind=video&upstreamId=foreign-job&protocol=openai&tokenId=71')
+  assert.equal(result.statusCode, 403)
+  assert.equal(calls.length, 1)
+})
+
+test('concurrent unified reads share the existing polling lease and cannot overwrite a final result', async t => {
+  const reading = deferred(), finish = deferred()
+  t.after(() => finish.resolve(Response.json({ id: 'original-job', status: 'completed', user_id: 17 })))
+  const { app, calls } = fixture(t, { fetch(_url, init) {
+    if (init.method === 'POST') return Response.json({ id: 'original-job', status: 'queued', user_id: 17 })
+    reading.resolve()
+    return finish.promise
+  } })
+  await submit(app, { kind: 'video', model: 'sora-2', duration: 8, prompt: 'Video', requestId: 'concurrent-id' })
+  const first = app.inject('/api/creation/requests/concurrent-id').then(value => value)
+  await reading.promise
+  const second = await app.inject('/api/creation/requests/concurrent-id')
+  assert.equal(second.json().status, 'pending')
+  assert.equal(calls.length, 2)
+  finish.resolve(Response.json({ id: 'original-job', status: 'completed', user_id: 17, video_url: 'https://media.example/original.mp4' }))
+  assert.equal((await first).json().status, 'succeeded')
+  assert.equal((await app.inject('/api/creation/requests/concurrent-id')).json().status, 'succeeded')
+  assert.equal(calls.length, 2)
+})

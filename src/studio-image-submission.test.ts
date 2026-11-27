@@ -598,7 +598,7 @@ it('recovers a known task from a temporary read failure using GET without anothe
   expect(await pending).toMatchObject({ phase: 'complete', error: '', urls: ['https://media.example/recovered.png'] })
   expect(api).toHaveBeenCalledTimes(2)
   expect(p.send).toHaveBeenCalledTimes(1)
-  expect(vi.mocked(api).mock.calls.every(([path]) => path.includes('/tasks/image/known-task?'))).toBe(true)
+  expect(vi.mocked(api).mock.calls.every(([path]) => path.includes('/requests/') && path.includes('upstreamId=known-task&'))).toBe(true)
 })
 for (const [status, retryAfter, wait] of [[408, undefined, 5000], [503, '120', 120000]] as const) it(`recovers an HTTP ${status} task query without resubmitting or ignoring Retry-After`, async () => {
   const p = await fixture(), { api } = await import('./state')
@@ -767,7 +767,7 @@ it('cancels queued recovery GETs on account change and releases capacity for the
     vi.mocked(api).mockResolvedValue({ status: 'succeeded', outputs: [{ url: 'https://media.example/new-account.png' }] })
     await p.resumeCreation(p.creation.tasks[0]!)
     expect(api).toHaveBeenCalledTimes(5)
-    expect(vi.mocked(api).mock.calls[4]![0]).toContain('/tasks/image/new-upstream?')
+    expect(vi.mocked(api).mock.calls[4]![0]).toContain('/requests/new-request?kind=image&upstreamId=new-upstream&')
     expect(vi.mocked(api).mock.calls.some(([path]) => path.includes('old-upstream-4'))).toBe(false)
     expect(p.creation.tasks).toHaveLength(1)
     expect(p.creation.tasks[0]).toMatchObject({ id: 'new-request', owner: 'other-owner', phase: 'complete', urls: ['https://media.example/new-account.png'] })
@@ -803,8 +803,8 @@ it('skips a stopped queued recovery without preventing the next task from being 
     finishFirst()
     await vi.advanceTimersByTimeAsync(0)
     expect(api).toHaveBeenCalledTimes(5)
-    expect(vi.mocked(api).mock.calls[4]![0]).toContain('/tasks/image/upstream-5?')
-    expect(vi.mocked(api).mock.calls.some(([path]) => path.includes('/tasks/image/upstream-4?'))).toBe(false)
+    expect(vi.mocked(api).mock.calls[4]![0]).toContain('/requests/request-5?kind=image&upstreamId=upstream-5&')
+    expect(vi.mocked(api).mock.calls.some(([path]) => path.includes('/requests/request-4?kind=image&upstreamId=upstream-4&'))).toBe(false)
     expect(p.creation.tasks[4]).toMatchObject({ id: 'request-4', phase: 'paused' })
     expect(p.send).toHaveBeenCalledTimes(1)
   } finally {
@@ -853,7 +853,7 @@ it.each(['seconds', 'http-date'])('backs off repeated task-query rate limits usi
     expect(await pending).toMatchObject({ phase: 'complete', upstreamId: 'limited-task', error: '', urls: ['https://media.example/limited-result.png'] })
     expect(api).toHaveBeenCalledTimes(4)
     expect(p.send).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(api).mock.calls.every(([path]) => path.includes('/tasks/image/limited-task?'))).toBe(true)
+    expect(vi.mocked(api).mock.calls.every(([path]) => path.includes('/requests/') && path.includes('upstreamId=limited-task&'))).toBe(true)
   } finally {
     const task = p.creation.tasks[0]
     if (task && task.phase === 'attention') task.phase = 'running'
