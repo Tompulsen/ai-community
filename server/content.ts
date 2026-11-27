@@ -27,6 +27,7 @@ import { readWorkSkillPackage, validateWorkSkillModel, type SkillModelCatalogue 
 import { skillInstructions, type SkillKind, type SkillReference } from '../shared/community-skills.ts';
 import { feedLimits, feedRequestSchema, readFeedWeights, type FeedRequest } from '../shared/recommendation.ts';
 import { prepareWorkModeration, commitWorkModeration, precheckCreation } from './work-moderation.ts';
+import { feedRepresentatives } from './image-identity.ts';
 
 const kinds = ['image', 'video', 'resource'] as const;
 type WorkKind = typeof kinds[number];
@@ -322,6 +323,7 @@ interface WorkCursor {
   context?: string;
   remaining?: string[];
   offset?: number;
+  imageBoundary?: string;
 }
 
 export function readWorkCursor(value: string | null): WorkCursor | null {
@@ -333,6 +335,7 @@ export function readWorkCursor(value: string | null): WorkCursor | null {
   if (!isRecord(parsed) || parsed.v !== 1 || typeof parsed.id !== 'string' || !idPattern.test(parsed.id) ||
     !['latest', 'featured', 'popular', 'random', 'discovery', 'hot'].includes(String(parsed.order))) fail(400, 'Invalid page cursor');
   if (parsed.heat !== undefined && (typeof parsed.heat !== 'number' || !Number.isSafeInteger(parsed.heat) || parsed.heat < 0)) fail(400, 'Invalid page cursor');
+  if (parsed.imageBoundary !== undefined && (typeof parsed.imageBoundary !== 'string' || !/^[0-9]{1,20}$/.test(parsed.imageBoundary))) fail(400, 'Invalid image boundary');
   if (parsed.order === 'random' && (typeof parsed.seed !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(parsed.seed) ||
     typeof parsed.boundary !== 'string' || !idPattern.test(parsed.boundary) || typeof parsed.anchor !== 'number' ||
     !Number.isSafeInteger(parsed.anchor) || parsed.anchor <= 0 || parsed.anchor > Date.now() + 60000)) fail(400, 'Invalid page cursor');
@@ -356,6 +359,7 @@ function writeWorkCursor(cursor: WorkCursor): string {
 async function contentPage(ctx: RequestContext, { scope = 'public', workId, authorId, limit = 100, feed }: { scope?: ContentScope; workId?: string; authorId?: string; limit?: number; feed?: FeedRequest } = {}): Promise<{ rows: CommunityRow[]; nextCursor: string | null }> {
   const params: (string | number | null)[] = [viewer(ctx)];
   let interestSource = '';
+  let representativeSource = '';
   const conditions = [scope === 'mine' ? 's."authorId" = $1' : scope === 'admin' ? 'TRUE' : `(${visibilitySql(ctx)})`];
   const add = (value: string | number | null) => { params.push(value); return `$${params.length}`; };
   if (scope === 'saved') conditions.push('EXISTS (SELECT 1 FROM note_favorite f WHERE f."noteId"=s."approvedNoteId" AND f."userId"=$1)');
@@ -442,12 +446,22 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
   let rank = "''";
   let seed: string | undefined, boundary: string | undefined, anchor: number | undefined;
   let contextHash: string | undefined;
+  let imageBoundary: string | undefined;
   if ((order === 'discovery' || order === 'hot') && feed) {
     anchor = cursor?.anchor ?? Date.now();
     const weights = options.communityFeedMode === 'latest' ? { interest: 0, fresh: 100, explore: 0 } : readFeedWeights(options.communityFeedWeights);
-    contextHash = createHash('sha256').update(JSON.stringify({ ...feed, cursor: undefined, viewer: viewer(ctx), weights })).digest('hex');
+    contextHash = createHash('sha256').update(JSON.stringify({ ...feed, cursor: undefined, viewer: viewer(ctx), weights, imageIdentity: 1 })).digest('hex');
     if (cursor && cursor.context !== contextHash) fail(409, '推荐条件已更新，请刷新作品后继续。', 'FEED_CHANGED');
-    conditions.push(`s."submittedAt"<=to_timestamp(${add(anchor)}/1000.0)`);
+    if (cursor && !cursor.imageBoundary) fail(409, '作品列表已更新，请刷新后继续浏览。', 'FEED_CHANGED');
+    // Only identities committed before the first page can affect this pagination batch.
+    imageBoundary = cursor?.imageBoundary ?? (await ctx.db.query<{ boundary: string }>('SELECT pg_snapshot_xmin(pg_current_snapshot())::text AS boundary')).rows[0]?.boundary;
+    if (!imageBoundary) fail(503, '作品列表暂时不可用，请稍后重试。');
+    const anchorParam = add(anchor);
+    conditions.push(`s."submittedAt"<=to_timestamp(${anchorParam}/1000.0)`);
+    if (scope === 'public' && !authorId && !workId) {
+      representativeSource = feedRepresentatives(from, conditions, anchorParam, add(imageBoundary));
+      conditions.push('s.id IN (SELECT id FROM feed_representatives)');
+    }
     // Keep the hot snapshot stable, then include every eligible work beyond it.
     if (order === 'hot' && cursor) {
       const ids = add(cursor.remaining!.join(','));
@@ -508,7 +522,8 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
     } else conditions.push(`s.id<${add(cursor.id)}`);
   }
   params.push(order === 'hot' && !cursor ? 120 : pageLimit + 1);
-  const result = await ctx.db.query<CommunityRow>(`${interestSource}
+  const source = interestSource ? interestSource + (representativeSource ? `,${representativeSource}` : '') : representativeSource ? `WITH ${representativeSource}` : '';
+  const result = await ctx.db.query<CommunityRow>(`${source}
     SELECT s.*, u.name AS "authorName", u.username AS "authorUsername", u."avatarId" AS "authorAvatarId",
       n.visibility AS "noteVisibility", n."repliesCount", n."renoteCount" AS "renotesCount",${heat} AS heat,${rank} AS rank,
       (SELECT COUNT(*)::int FROM note_reaction r WHERE r."noteId" = n.id AND r.reaction IN ('${heart}', '${heart}\ufe0f')) AS likes,
@@ -524,10 +539,10 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
   const nextCursor = result.rows.length > pageLimit && last ? writeWorkCursor({
     v: 1, id: last.id, order, ...(order === 'featured' || order === 'popular' ? { heat: Number(last.heat ?? 0) } : {}),
     ...(order === 'random' ? { seed, boundary, anchor } : {}),
-    ...(order === 'discovery' ? { rank: String(last.rank), anchor, context: contextHash } : {}),
+    ...(order === 'discovery' ? { rank: String(last.rank), anchor, context: contextHash, imageBoundary } : {}),
     ...(order === 'hot' ? { remaining: cursor ? cursor.remaining : result.rows.map(row => row.id),
       offset: cursor ? (cursor.remaining!.includes(last.id) ? cursor.remaining!.indexOf(last.id) + 1 : cursor.remaining!.length) : pageLimit,
-      anchor, context: contextHash } : {}),
+      anchor, context: contextHash, imageBoundary } : {}),
   }) : null;
   const identities = await readPublicIdentities(ctx, rows.map(row => row.authorId));
   return { rows: rows.map(row => {

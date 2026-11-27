@@ -447,7 +447,7 @@ async function historicalFixture(t, rows, hooks = {}) {
       if (state.generated.length === 2) complete(true);
       return { rows: [{ id: params[0] }], rowCount: 1 };
     }
-    if (sql.includes('ORDER BY id LIMIT 16')) {
+    if (sql.startsWith('SELECT id,name,type') && sql.includes('ORDER BY id LIMIT 16')) {
       assert.match(sql, /WHERE id>\$1 ORDER BY id LIMIT 16/);
       state.pages.push(params[0]);
       const page = rows.filter(row => row.id > params[0]).sort((a, b) => a.id.localeCompare(b.id)).slice(0, 16);

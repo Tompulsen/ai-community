@@ -23,6 +23,7 @@ function fixture(path, method = 'GET') {
     config: { url: 'https://community.example', id: 'aidx' },
     db: { async query(sql, values = []) {
       statements.push({ sql, values })
+      if (sql.startsWith('SELECT pg_snapshot_xmin')) return { rows: [{ boundary: '10' }] }
       if (sql.includes('SELECT s.*')) return { rows: [row] }
       if (sql.includes('FROM drive_file')) return { rows: values[0].map(id => ({
         id, userId: 'author1', name: `${id}.png`, type: 'image/png', size: 100, storedInternal: true,
@@ -92,6 +93,7 @@ test('PostgreSQL evaluates search matches and recommendation tag interests once 
       "renoteId" varchar(32),text text,"replyId" varchar(32),"fileIds" varchar[] DEFAULT '{}');
     CREATE TABLE note_reaction ("noteId" varchar(32),"userId" varchar(32),reaction text);
     CREATE TABLE note_favorite ("noteId" varchar(32),"userId" varchar(32));
+    CREATE TABLE drive_file (id varchar(32) PRIMARY KEY,"userId" varchar(32),md5 text,properties jsonb);
     CREATE TABLE community_submission (id varchar(32) PRIMARY KEY,"authorId" varchar(32),"approvedNoteId" varchar(32),
       status text DEFAULT 'published',destination text DEFAULT 'community',category text DEFAULT 'image',
       "tagIds" varchar[] DEFAULT '{}',"fileIds" varchar[] DEFAULT '{}',title text DEFAULT 'Work',

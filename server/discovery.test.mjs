@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import pg from 'pg'
+import { PGlite } from '@electric-sql/pglite'
 import { randomBytes } from 'node:crypto'
 import { handleContent, readWorkCursor, publicVisibilitySql } from './content.ts'
 
@@ -14,7 +15,8 @@ function context(db, body = {}, actor = 'reader') {
 test('feed validates bounds before querying and never writes preference or search history', async () => {
   const statements = [], db = { async query(sql, params = []) {
     statements.push(sql)
-    assert(/^(SELECT|WITH feed_interests AS MATERIALIZED)/.test(sql.trim()))
+    if (sql.startsWith('SELECT pg_snapshot_xmin')) return { rows: [{ boundary: '10' }] }
+    assert(/^(SELECT|WITH (feed_interests|feed_representatives) AS MATERIALIZED)/.test(sql.trim()))
     for (let i = 1; i <= params.length; i++) assert(new RegExp(`\\$${i}(?!\\d)`).test(sql), `unused parameter ${i}`)
     return { rows: [] }
   } }
@@ -37,14 +39,18 @@ test('feed validates bounds before querying and never writes preference or searc
   }
 })
 
-test('discovery PostgreSQL replacement, ranking, stable pages and permissions', { skip: !process.env.FOLLOWING_TEST_DATABASE_URL }, async t => {
+test('discovery PostgreSQL replacement, ranking, stable pages and permissions', async t => {
   const connectionString = process.env.FOLLOWING_TEST_DATABASE_URL
-  assert.equal(new URL(connectionString).pathname, '/community_follow_test')
+  if (connectionString) assert.equal(new URL(connectionString).pathname, '/community_follow_test')
   const schema = `discovery_test_${randomBytes(6).toString('hex')}`
-  const admin = new pg.Pool({ connectionString })
-  await admin.query(`CREATE SCHEMA ${schema}`)
-  const db = new pg.Pool({ connectionString, options: `-c search_path=${schema}` })
-  t.after(async () => { await db.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end() })
+  const admin = connectionString ? new pg.Pool({ connectionString }) : null
+  if (admin) await admin.query(`CREATE SCHEMA ${schema}`)
+  const local = admin ? null : new PGlite()
+  const db = admin ? new pg.Pool({ connectionString, options: `-c search_path=${schema}` }) : {
+    query: (sql, values = []) => values.length ? local.query(sql, values) : local.exec(sql).then(results => results.at(-1)),
+    end: () => local.close(),
+  }
+  t.after(async () => { await db.end(); if (admin) { await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end() } })
   await db.query(`CREATE TABLE "user" (id varchar(32) PRIMARY KEY, username text, name text, "avatarId" varchar(32), host text,
     "isDeleted" boolean DEFAULT false,"isSuspended" boolean DEFAULT false,"movedToUri" text,"requireSigninToViewContents" boolean DEFAULT false,
     "makeNotesHiddenBefore" bigint,"makeNotesFollowersOnlyBefore" bigint);
@@ -57,6 +63,8 @@ test('discovery PostgreSQL replacement, ranking, stable pages and permissions', 
       reactions jsonb DEFAULT '{}',"renoteId" varchar(32),text text,"replyId" varchar(32),"fileIds" varchar[] DEFAULT '{}');
     CREATE TABLE note_reaction ("noteId" varchar(32),"userId" varchar(32),reaction text);
     CREATE TABLE note_favorite ("noteId" varchar(32),"userId" varchar(32));
+    CREATE TABLE drive_file (id varchar(32) PRIMARY KEY,"userId" varchar(32),md5 text,properties jsonb,
+      type text DEFAULT 'image/webp',name text DEFAULT 'image.webp',size int DEFAULT 100,"thumbnailAccessKey" text,"storedInternal" boolean DEFAULT true);
     CREATE TABLE community_submission (id varchar(32) PRIMARY KEY,"authorId" varchar(32),"approvedNoteId" varchar(32),status text DEFAULT 'published',
       destination text DEFAULT 'community',category text DEFAULT 'image',"tagIds" varchar[] DEFAULT '{}',"fileIds" varchar[] DEFAULT '{}',
       title text DEFAULT 'test',text text DEFAULT '',generation jsonb,"submittedAt" timestamptz,version int DEFAULT 1);
@@ -65,7 +73,7 @@ test('discovery PostgreSQL replacement, ranking, stable pages and permissions', 
     INSERT INTO following VALUES ('reader','author');
     INSERT INTO community_tag (id,name,category) VALUES ('tag1','海报','image'),('tag2','风景','image');`)
   async function reset(count = 35) {
-    await db.query('TRUNCATE community_submission,note,blocking,note_reaction,note_favorite')
+    await db.query('TRUNCATE community_submission,note,blocking,note_reaction,note_favorite,drive_file')
     await db.query(`INSERT INTO note (id,"userId","repliesCount") SELECT 'n'||i,'author',i FROM generate_series(1,$1::int) i;
     `.trim(), [count])
     await db.query(`INSERT INTO community_submission (id,"authorId","approvedNoteId","tagIds","submittedAt")
@@ -148,6 +156,55 @@ test('discovery PostgreSQL replacement, ranking, stable pages and permissions', 
       result = await call({ ...body, cursor: result.nextCursor })
     }
   }
+  async function attach(work, file, group, extra = {}) {
+    const properties = { communityImageIdentity: { version: 1, state: 'ready', md5: file, group, readyAt: 1, transactionId: '0', ...extra } }
+    await db.query('INSERT INTO drive_file (id,"userId",md5,properties) VALUES ($1::varchar,$2,$1::text,$3)', [file, 'author', JSON.stringify(properties)])
+    await db.query('UPDATE community_submission SET "fileIds"=ARRAY[$2]::varchar[] WHERE id=$1', [work, file])
+  }
+  await t.test('same-author resized copies have one stable representative before every sort and the hot tail', async () => {
+    await reset(241)
+    for (const [work, file, group] of [['w0001','f1','picture1'],['w0241','f241','picture1'],['w0002','f2','picture2'],['w0121','f121','picture2']]) await attach(work, file, group)
+    for (const sort of ['recommended','latest','featured','following']) {
+      const ids = await collect({ sort })
+      assert.equal(ids.size, 239)
+      assert(!ids.has('w0001')); assert(!ids.has('w0002')); assert(ids.has('w0241')); assert(ids.has('w0121'))
+    }
+  })
+  await t.test('filters and visibility choose eligible copies; profiles, other authors and non-image works keep all records', async () => {
+    await reset(3)
+    await attach('w0001', 'f1', 'same'); await attach('w0002', 'f2', 'same')
+    assert.deepEqual(await collect({ tag: 'tag2' }), new Set(['w0001','w0003']))
+    await db.query("UPDATE community_submission SET title='Only this title' WHERE id='w0001'")
+    assert.deepEqual(await collect({ query: 'Only this title' }), new Set(['w0001']))
+    await db.query("UPDATE note SET visibility='specified' WHERE id='n2'")
+    assert.deepEqual(await collect({}), new Set(['w0001','w0003']))
+    await db.query("UPDATE note SET visibility='public' WHERE id='n2'")
+    const profile = context(db); profile.req.method='GET'; profile.url=new URL('https://community.test/api/works?authorId=author')
+    await handleContent(profile); assert.equal(profile.result.payload.items.length, 3)
+    await db.query("UPDATE community_submission SET category='resource' WHERE id='w0002'")
+    assert.equal((await collect({})).size, 3)
+    await db.query("UPDATE community_submission SET category='image',\"authorId\"='other' WHERE id='w0002'; UPDATE drive_file SET \"userId\"='other' WHERE id='f2'; UPDATE note SET \"userId\"='other' WHERE id='n2'")
+    assert.equal((await collect({})).size, 3)
+  })
+  await t.test('multi-image works use all attachments in order and unverified or changed files remain independent', async () => {
+    await reset(4)
+    for (const [work,file,group] of [['w0001','f1','cover'],['w0002','f2','cover'],['w0003','f3','other'],['w0004','f4','different']]) await attach(work,file,group)
+    await db.query(`UPDATE community_submission SET "fileIds"=CASE id WHEN 'w0001' THEN ARRAY['f1','f3'] WHEN 'w0002' THEN ARRAY['f2','f4'] ELSE "fileIds" END`)
+    assert.equal((await collect({})).size, 4)
+    await db.query(`UPDATE community_submission SET "fileIds"=ARRAY['f2','f3'] WHERE id='w0002'`)
+    assert.deepEqual(await collect({}), new Set(['w0002','w0003','w0004']))
+    await db.query(`UPDATE community_submission SET "fileIds"=ARRAY['f3','f2'] WHERE id='w0002'`)
+    assert.equal((await collect({})).size, 4)
+    await db.query(`UPDATE community_submission SET "fileIds"=ARRAY['f2','f3'] WHERE id='w0002'; UPDATE drive_file SET md5='changed' WHERE id='f2'`)
+    assert.equal((await collect({})).size, 4)
+  })
+  await t.test('newly indexed images do not change an existing pagination batch', async () => {
+    await reset(35)
+    await attach('w0001','f1','same',{ readyAt: Date.now()+60000 }); await attach('w0035','f35','same',{ readyAt: Date.now()+60000 })
+    for (const sort of ['recommended','latest','featured','following']) assert.equal((await collect({ sort })).size, 35)
+    await db.query(`UPDATE drive_file SET properties=jsonb_set(properties,'{communityImageIdentity,readyAt}','1')`)
+    assert.equal((await collect({})).size, 34)
+  })
   await t.test('all modes traverse the complete catalogue, including the hot 120 boundary', async () => {
     for (const count of [0, 12, 120, 121, 241]) {
       await reset(count)

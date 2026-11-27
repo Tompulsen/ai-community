@@ -14,6 +14,7 @@ import sharp from 'sharp';
 import { imageExtensions, videoExtensions, publicImageName, privateMetadataFreeImage } from './image-privacy.ts';
 import { privateMetadataFreeVideo, videoDurationSeconds } from './video-privacy.ts';
 import { httpError, roleCondition } from './auth.ts';
+import { imageIdentityBackfill } from './image-identity.ts';
 import type { Database, RequestContext } from './types.ts';
 
 const MiB = 1024 * 1024;
@@ -416,6 +417,7 @@ async function processHistoricalImage(db: Database, root: string, file: PrivacyF
 
 export function startMediaWorker({ db, filesRoot }: { db: Database; filesRoot: string }): () => Promise<void> {
   let stopped = false, running: Promise<void> | null = null;
+  const backfillIdentities = imageIdentityBackfill(db, async key => confinedFile(await realpath(filesRoot), key));
   let privacyCursor = '', nextPrivacyAt = 0;
   const backfillImagePrivacy = async (root: string) => {
     if (Date.now() < nextPrivacyAt || stopped) return;
@@ -487,6 +489,7 @@ export function startMediaWorker({ db, filesRoot }: { db: Database; filesRoot: s
       }
     }
     if (idle && !stopped) await backfillImagePrivacy(root);
+    if (!stopped) await backfillIdentities();
   };
   const tick = () => {
     if (stopped || running) return;
