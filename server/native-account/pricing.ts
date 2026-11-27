@@ -1,6 +1,7 @@
 export type ModelPriceRow = {
   model: string;
   group: string;
+  groupRatio?: number;
   billing: string;
   price: string;
   requestPrice?: number;
@@ -371,6 +372,7 @@ export function modelPriceRows(
       rows.push({
         model: model.model_name,
         group,
+        groupRatio: ratio,
         billing,
         price,
         ...(details ? { details } : {}),

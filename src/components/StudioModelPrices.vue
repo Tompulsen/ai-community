@@ -8,6 +8,7 @@ import { studioAccount } from '../studio-account'
 import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, waitCreationGroup, type CreationModel } from '../native-studio'
 import { chats, createEmptyChat, loadChats, saveChats } from '../native-chat'
 import { modelChoices, modelKind } from '../model-preferences'
+import { selectedModelPrices } from '../studio-billing'
 import type { ModelPriceRow, ModelPricing } from '../../server/native-account/pricing'
 import StudioModelPriceCard from './StudioModelPriceCard.vue'
 
@@ -32,6 +33,7 @@ async function load() {
   const valid = () => current === revision && owner === session.user?.id && accountId === (session.user?.accountId || session.user?.id)
   loading.value = true; catalogueLoading.value = true
   await Promise.all([
+      loadCreationGroups(),
       studioAccount<ModelPricing>('model-pricing', 'GET', undefined, controller.signal).then(result => {
         if (!valid()) return
         if (result.userId !== Number(accountId)) throw new Error('账号已变化，请刷新价格。')
@@ -153,14 +155,17 @@ onBeforeUnmount(() => { revision++; launchRevision++; request?.abort() })
     </div>
     <p v-if="missingModel" class="prices-state" role="status">{{ model }}：模型广场暂未提供此模型的可用价格，请查看模型详情。</p>
     <p v-if="loading" class="prices-state" role="status">正在读取模型价格…</p>
+    <p v-if="creation.groupsLoading" class="prices-state" role="status">正在读取当前分组…</p>
+    <div v-if="creation.groupsError" class="prices-state form-error" role="alert"><p>{{ creation.groupsError }} 以下价格按卡片标注的分组展示。</p><button type="button" class="studio-tool" @click="loadCreationGroups(true)">重试分组</button></div>
     <p v-if="launching" class="prices-state" role="status">正在准备 {{ launching }} 的工作台…</p>
     <p v-if="launchError" class="prices-state form-error" role="alert">{{ launchError }}</p>
     <div v-if="error" class="prices-state form-error" role="alert"><p>{{ error }}</p><button type="button" class="studio-tool" @click="load"><RefreshCw :size="15" />重新读取</button></div>
     <template v-if="data">
       <p v-if="catalogueLoading" class="prices-state" role="status">正在读取模型分类…</p>
       <div v-if="catalogueError" class="prices-state form-error" role="alert"><p>模型分类暂不可用，当前展示全部价格。{{ catalogueError }}</p><button type="button" class="studio-tool" @click="load">重试分类</button></div>
-      <div v-if="rows.length" class="model-price-grid"><StudioModelPriceCard v-for="[name, prices] in rows" :key="name" :rows="prices" :featured="name === model" :catalogue-model="catalogueModels.get(name)" :catalogue-loading="catalogueLoading" :busy="Boolean(creation.modelLaunchPending)" :launching="launching === name" @launch="launch" /></div>
+      <div v-if="rows.length" class="model-price-grid"><StudioModelPriceCard v-for="[name, prices] in rows" :key="name" :rows="prices" :preferred-group="selectedModelPrices(data, name, creation.selectedGroup || 'auto')[0]?.group" :featured="name === model" :catalogue-model="catalogueModels.get(name)" :catalogue-loading="catalogueLoading" :busy="Boolean(creation.modelLaunchPending)" :launching="launching === name" @launch="launch" /></div>
       <div v-else-if="kind === 'all' || !catalogueLoading" class="prices-state" role="status"><p>{{ models.length ? '当前筛选下没有匹配的模型，试试其他类型、名称或分组。' : '模型广场暂未提供可用价格。' }}</p><button v-if="models.length" type="button" class="studio-tool" @click="kind = 'all'; query = ''">查看全部模型</button></div>
+      <p class="prices-note">价格已含卡片所选分组的倍率，点击调用将使用该分组。自动分组优先展示首个可用候选分组的价格，可切换分组对比；工作台自动分组的预估范围以实际路由为准。</p>
       <p class="prices-note">每次请求为单次调用价格；按量模型分别列出输入、输出价格。动态计费及图片、音频等附加费用以模型广场详情为准。</p>
     </template>
   </section>

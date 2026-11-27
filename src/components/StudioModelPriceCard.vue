@@ -2,15 +2,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, useId } from 'vue'
 import { ArrowUpRight, ChevronRight, Copy, X } from '@lucide/vue'
-import { creation, type CreationModel } from '../native-studio'
+import type { CreationModel } from '../native-studio'
 import { errorMessage, notify } from '../state'
 import type { ModelPriceRow } from '../../server/native-account/pricing'
 
-const props = defineProps<{ rows: ModelPriceRow[]; featured?: boolean; catalogueModel?: CreationModel; catalogueLoading?: boolean; busy?: boolean; launching?: boolean }>()
+const props = defineProps<{ rows: ModelPriceRow[]; preferredGroup?: string; featured?: boolean; catalogueModel?: CreationModel; catalogueLoading?: boolean; busy?: boolean; launching?: boolean }>()
 const emit = defineEmits<{ launch: [row: ModelPriceRow] }>()
 type PriceTier = NonNullable<ModelPriceRow['details']>['tiers'][number]
-const group = ref(props.rows.some(row => row.group === creation.selectedGroup) ? creation.selectedGroup : props.rows[0]?.group || '')
-const row = computed(() => props.rows.find(entry => entry.group === group.value) || props.rows[0])
+const chosenGroup = ref('')
+const row = computed(() => props.rows.find(entry => entry.group === chosenGroup.value)
+  || props.rows.find(entry => entry.group === props.preferredGroup) || props.rows[0])
+const group = computed({ get: () => row.value?.group || '', set: value => { chosenGroup.value = value } })
+const groupLabel = (entry: ModelPriceRow) => `${entry.group}${entry.groupRatio !== undefined ? ` · ${entry.groupRatio}×` : ''}`
 const launchIssueId = `model-launch-${useId()}`
 const launchIssue = computed(() => props.catalogueLoading ? '正在确认模型调用方式…' : !props.catalogueModel ? '此模型暂不支持工作台调用' : !props.catalogueModel.groups?.includes(row.value?.group || '') ? '当前分组暂不可调用' : '')
 const tier = computed(() => row.value?.details?.tiers[0])
@@ -39,10 +42,11 @@ onBeforeUnmount(() => dialog.value?.close())
       <div class="price-unit"><span>{{ unit }}</span><button v-if="extraCount" type="button" class="price-extras" @click="dialog?.showModal()">{{ extraCount }} 项缓存费用</button><span v-if="tier.context" class="price-context">{{ tier.context }}</span></div>
     </template>
     <p v-else class="price-fallback">{{ row.price }}</p>
+    <p v-if="row.groupRatio !== undefined" class="price-ratio">已含 {{ row.groupRatio }}× 分组倍率</p>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <footer class="price-card-footer">
-      <select v-if="rows.length > 1" v-model="group" class="price-group select-control" :disabled="busy" :aria-label="`${row.model} 计费分组`"><option v-for="entry in rows" :key="entry.group" :value="entry.group">{{ entry.group }}</option></select>
-      <span v-else class="price-single-group">{{ row.group }}</span>
+      <select v-if="rows.length > 1" v-model="group" class="price-group select-control" :disabled="busy" :aria-label="`${row.model} 计费分组`"><option v-for="entry in rows" :key="entry.group" :value="entry.group">{{ groupLabel(entry) }}</option></select>
+      <span v-else class="price-single-group">{{ groupLabel(row) }}</span>
       <div class="price-card-actions"><button type="button" class="studio-tool price-command" :aria-label="`查看 ${row.model} 价格详情`" @click="dialog?.showModal()">{{ row.details && row.details.tiers.length > 1 ? '分档详情' : '详情' }}<ChevronRight :size="14" aria-hidden="true" /></button>
         <button type="button" class="button primary btn price-launch" :aria-label="`调用 ${row.model}`" :aria-describedby="launchIssue ? launchIssueId : undefined" :aria-busy="launching" :disabled="busy || Boolean(launchIssue)" @click="emit('launch', row)">{{ launching ? '正在进入…' : '调用' }}<ArrowUpRight v-if="!launching" :size="15" aria-hidden="true" /></button>
       </div>
@@ -51,6 +55,7 @@ onBeforeUnmount(() => dialog.value?.close())
     <Teleport to="body"><dialog ref="dialog" class="compact-dialog model-price-dialog" :aria-labelledby="titleId" @click="($event.target === dialog) && dialog?.close()">
       <header class="dialog-heading"><h2 :id="titleId">模型计费详情</h2><button type="button" class="icon-button" aria-label="关闭模型计费详情" title="关闭" @click="dialog?.close()"><X :size="18" /></button></header>
       <div class="dialog-body price-details"><h3>{{ row.model }}</h3><p class="price-detail-note">{{ row.group }} · {{ row.billing }}</p>
+        <p v-if="row.groupRatio !== undefined" class="price-detail-note">已含 {{ row.groupRatio }}× 分组倍率，调用将使用 {{ row.group }} 分组。</p>
         <template v-if="row.details"><section v-for="(entry, index) in row.details.tiers" :key="index" class="price-tier" :aria-label="entry.context || '计费价格'">
           <h4 v-if="entry.context">{{ entry.context }}</h4>
           <dl class="price-values"><div v-for="[label, value] in priceValues(entry)" :key="label"><dt>{{ label }}</dt><dd>{{ value ?? '—' }}</dd></div></dl>
@@ -80,6 +85,7 @@ onBeforeUnmount(() => dialog.value?.close())
 .price-context { flex-basis: 100%; overflow-wrap: anywhere; }
 .price-extras { padding: 0; color: var(--muted); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .price-fallback { padding-top: 8px; font-size: 14px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; white-space: pre-line; }
+.price-ratio { color: var(--muted); font-size: 12px; }
 .price-card-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; min-width: 0; margin-top: auto; padding-top: 4px; color: var(--muted); font-size: 12px; }
 .price-card-actions { display: flex; align-items: center; gap: 4px; flex: none; margin-left: auto; }
 .price-launch { min-height: 44px; min-width: 76px; padding: 8px 12px; font-size: 12px; }

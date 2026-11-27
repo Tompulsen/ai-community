@@ -73,6 +73,16 @@ test('fixed prices preserve numeric points with each personalized group ratio an
   ])
 })
 
+test('displayed group ratios match charged prices exactly once, including zero and personalized ratios', () => {
+  const data = { data: [{ ...fixed, enable_groups: ['default', '对接', 'free', 'member'] }],
+    group_ratio: { default: 0.08, 对接: 1, free: 0, member: 0.03125 } }
+  const result = modelPriceRows(data, status)
+  assert.deepEqual(result.rows.map(row => [row.group, row.groupRatio, row.requestPrice, row.details.tiers[0].perRequest]), [
+    ['default', 0.08, 100, '积分 100'], ['对接', 1, 1250, '积分 1,250'],
+    ['free', 0, 0, '积分 0'], ['member', 0.03125, 39.0625, '积分 39.0625'],
+  ])
+})
+
 test('zero and fractional prices retain their complete precision', () => {
   const zero = modelPriceRows(catalog({ ...fixed, model_price: 0 }), status)
   assert.equal(zero.rows[0].requestPrice, 0)

@@ -90,7 +90,9 @@ async function videoPricing(page: Page) {
       { plugin_name: 'Sora', billing_mode: 'tiered_expr', billing_expr: 'tier("base", u("seconds") * 0.15)', billing_usage_schema: schema },
     ] }
   const state = { failed: false, model }
-  await page.route('**/api/creation/**', route => route.fulfill({ json: { tokenId: 41, items: [{ id: model.model_name, kinds: ['video'] }] } }))
+  await page.route('**/api/creation/**', route => route.fulfill({ json: { tokenId: 41, items: [{ id: model.model_name, kinds: ['video'],
+    video: { durations: Array.from({ length: 15 }, (_, index) => index + 1), autoDuration: 8, resolutions: ['480p', '720p', '1080p'] },
+  }] } }))
   await page.route('**/api/account', route => route.fulfill({ json: { linked: true, subject: '17', walletEnabled: true, points: {
     enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: '100', permanentPoints: '10000',
     legacyApiQuota: 0, paidApiQuota: 1000000, totalApiQuota: 1010000, charityExpiringAt: null,

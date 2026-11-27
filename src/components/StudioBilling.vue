@@ -34,7 +34,8 @@ const pointsPricing = computed(() => prices.value?.currency === '积分')
 const compactLabel = computed(() => quote.value ? cost.value + ' 积分' : loading.value ? '计价中…' : pointsPricing.value && rows.value.length ? '按量计费' : '查看价格')
 const usageBased = computed(() => rows.value.some(row => row.details?.unit === 'tokens'))
 function billingLabel(row: ModelPriceRow) {
-  return props.kind === 'image' && billingParameters.value.protocol !== 'async' && row.imageCountMultiplier ? '每张图片 · 已含分组倍率' : row.billing
+  const unit = props.kind === 'image' && billingParameters.value.protocol !== 'async' && row.imageCountMultiplier ? '每张图片' : row.billing
+  return `${unit} · ${row.groupRatio !== undefined ? `已含 ${row.groupRatio}× 分组倍率` : '已含分组倍率'}`
 }
 function showPrices() { menu.value?.close(); emit('prices') }
 let version = 0

@@ -79,6 +79,7 @@ describe('invocation points', () => {
     const catalog = { ...prices, rows: [row, { ...row, group: 'default' }, { ...row, model: 'other' }], autoGroups: ['default', 'image'] }
     expect(selectedModelPrices(catalog, row.model, 'auto').map(row => row.group)).toEqual(['default', 'image'])
     expect(selectedModelPrices(catalog, row.model, 'image')).toEqual([row])
+    expect(selectedModelPrices({ ...catalog, autoGroups: ['missing', 'image', 'default'] }, row.model, 'auto').map(row => row.group)).toEqual(['image', 'default'])
     expect(selectedModelPrices({ ...catalog, autoGroups: [] }, row.model, 'auto')).toEqual([])
     expect(selectedModelPrices(catalog, row.model, 'missing')).toEqual([])
     expect(selectedModelPrices(catalog, '', 'image')).toEqual([])
