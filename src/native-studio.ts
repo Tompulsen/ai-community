@@ -245,33 +245,36 @@ function galleryDatabase(): Promise<IDBDatabase | undefined> {
     }
   })
 }
-async function gallerySource(url: string, preview: boolean): Promise<string | undefined> {
+async function galleryValue(url: string, preview: boolean): Promise<unknown> {
   const id = url.slice('legacy-gallery:'.length)
   if (!validId(id)) return
+  const db = await galleryDatabase()
+  if (!db) throw new Error('旧图库暂时无法读取，原记录已保留。')
+  return new Promise((resolve, reject) => {
+    const stores = db.objectStoreNames.contains('originals') ? ['images', 'originals'] : ['images']
+    const transaction = db.transaction(stores, 'readonly')
+    const image = transaction.objectStore('images').get(id)
+    image.onsuccess = () => {
+      const metadata = image.result
+      if (preview && metadata?.thumbnail instanceof Blob) return resolve(metadata.thumbnail)
+      if (stores.includes('originals')) {
+        const original = transaction.objectStore('originals').get(id)
+        original.onsuccess = () => resolve(original.result instanceof Blob ? original.result : metadata?.imageData)
+        original.onerror = () => reject(original.error)
+      } else resolve(metadata?.imageData)
+    }
+    image.onerror = () => reject(image.error)
+    transaction.oncomplete = () => db.close()
+    transaction.onabort = () => { db.close(); reject(transaction.error) }
+  })
+}
+async function gallerySource(url: string, preview: boolean): Promise<string | undefined> {
   const key = `${activeOwner()}:${url}:${preview ? 'preview' : 'original'}`
   if (localMedia[key]) return localMedia[key]
   if (mediaLoads.has(key)) return mediaLoads.get(key)
   const version = epoch
   const loading = (async () => {
-    const db = await galleryDatabase()
-    if (!db) throw new Error('旧图库暂时无法读取，原记录已保留。')
-    const value = await new Promise<unknown>((resolve, reject) => {
-      const stores = db.objectStoreNames.contains('originals') ? ['images', 'originals'] : ['images']
-      const transaction = db.transaction(stores, 'readonly')
-      const image = transaction.objectStore('images').get(id)
-      image.onsuccess = () => {
-        const metadata = image.result
-        if (preview && metadata?.thumbnail instanceof Blob) return resolve(metadata.thumbnail)
-        if (stores.includes('originals')) {
-          const original = transaction.objectStore('originals').get(id)
-          original.onsuccess = () => resolve(original.result instanceof Blob ? original.result : metadata?.imageData)
-          original.onerror = () => reject(original.error)
-        } else resolve(metadata?.imageData)
-      }
-      image.onerror = () => reject(image.error)
-      transaction.oncomplete = () => db.close()
-      transaction.onabort = () => { db.close(); reject(transaction.error) }
-    })
+    const value = await galleryValue(url, preview)
     if (version !== epoch) return
     const source = value instanceof Blob ? URL.createObjectURL(value) : safeResultUrl(value)
     if (!source) throw new Error('旧图库原文件暂时无法读取，原记录已保留。')
@@ -285,7 +288,7 @@ async function gallerySource(url: string, preview: boolean): Promise<string | un
       }
     }
     return undefined
-  })
+  }).finally(() => { if (mediaLoads.get(key) === loading) mediaLoads.delete(key) })
   mediaLoads.set(key, loading)
   return loading
 }
@@ -349,16 +352,18 @@ export async function readableMedia(url: string, kind: CreationKind, preview = f
   if (!source) throw new Error('生成文件暂时无法读取，任务记录已保留。')
   return source
 }
-function imageReadKey(url: string) { return `${epoch}:${activeOwner()}:${mediaSource(url, false, 'image') || url}` }
-export function forgetCreationImage(url: string) { imageBlobs.delete(imageReadKey(url)) }
-export function readCreationImage(url: string, signal: AbortSignal = new AbortController().signal): Promise<Blob> {
+function imageReadKey(url: string, preview = false) {
+  return `${epoch}:${activeOwner()}:${preview}:${/^(?:studio-asset:|legacy-gallery:)/.test(url) ? url : mediaSource(url, preview, 'image') || url}`
+}
+export function forgetCreationImage(url: string, preview = false) { imageBlobs.delete(imageReadKey(url, preview)) }
+export function readCreationImage(url: string, signal: AbortSignal = new AbortController().signal, preview = false): Promise<Blob> {
   signal.throwIfAborted()
-  const key = imageReadKey(url), cached = imageBlobs.get(key)
+  const key = imageReadKey(url, preview), cached = imageBlobs.get(key)
   if (cached) { imageBlobs.delete(key); imageBlobs.set(key, cached); return Promise.resolve(cached) }
   let entry = imageReads.get(key)
   if (!entry || entry.controller.signal.aborted) {
     const controller = new AbortController(), version = epoch
-    entry = { controller, readers: 0, promise: loadCreationImage(url, controller.signal).then(blob => {
+    entry = { controller, readers: 0, promise: loadCreationImage(url, controller.signal, preview).then(blob => {
       controller.signal.throwIfAborted()
       if (version !== epoch) throw new DOMException('Stopped', 'AbortError')
       imageBlobs.set(key, blob)
@@ -383,16 +388,44 @@ export function readCreationImage(url: string, signal: AbortSignal = new AbortCo
     if (--current.readers === 0) current.controller.abort()
   })
 }
-async function loadCreationImage(url: string, signal: AbortSignal): Promise<Blob> {
+async function loadCreationImage(url: string, signal: AbortSignal, preview = false): Promise<Blob> {
   const version = epoch, accepted = activeOwner()
   const check = () => {
     signal.throwIfAborted()
     if (version !== epoch || accepted !== activeOwner()) throw new DOMException('Stopped', 'AbortError')
   }
   check()
+  // Local originals stay in IndexedDB; only the viewing component owns their object URLs.
+  if (url.startsWith('studio-asset:')) {
+    const [, id, index] = url.split(':'), identity = JSON.stringify(['image', url])
+    const cached = preview ? await readTaskPreview(accepted, id!, identity, Number(index)) : undefined
+    let blob = cached?.blob || await readTaskAsset(accepted, url)
+    check()
+    if (!blob) throw new Error('生成文件暂时无法读取，任务记录已保留。')
+    if (!blob.size || !blob.type.startsWith('image/')) throw new Error('本地原图无效，任务记录已保留。')
+    if (preview && !cached) {
+      try {
+        blob = await imageThumbnail(blob, signal)
+        check()
+        await saveTaskPreview(accepted, id!, identity, blob, undefined, Number(index)).catch(() => {})
+      } catch { check() }
+    }
+    return blob
+  }
+  if (url.startsWith('legacy-gallery:')) {
+    const value = await galleryValue(url, preview)
+    check()
+    if (value instanceof Blob) {
+      if (!value.type.startsWith('image/') || !value.size) throw new Error('旧图库原文件无效，原记录已保留。')
+      return value
+    }
+    const source = safeResultUrl(value)
+    if (!source) throw new Error('旧图库原文件暂时无法读取，原记录已保留。')
+    url = source
+  }
   const inline = await imageBlob(url)
   if (inline) return inline
-  const source = await readableMedia(url, 'image')
+  const source = await readableMedia(url, 'image', preview)
   const remote = !/^(?:blob:|data:)/.test(source)
   const deadline = Date.now() + 300000
   for (let attempt = 0; ; attempt++) {
@@ -453,9 +486,7 @@ async function loadCreationImage(url: string, signal: AbortSignal): Promise<Blob
 }
 export async function portableImage(url: string) {
   if (!url.startsWith('legacy-gallery:') && !url.startsWith('studio-asset:') && !url.startsWith('blob:')) return url
-  const response = await fetch(url.startsWith('blob:') ? url : await readableMedia(url, 'image'))
-  if (!response.ok) throw new Error('历史图片无法读取，请重新选择参考图。')
-  const blob = await response.blob()
+  const blob = await readCreationImage(url)
   if (!/^image\/(?:png|jpeg|webp)$/.test(blob.type) || !blob.size || blob.size > 20 * 1024 * 1024) throw new Error('历史图片须为 PNG、JPEG 或 WebP，且不超过 20 MB。')
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
@@ -1346,8 +1377,8 @@ export function saveCreationLocally(value: CreationTask): Promise<void> {
       task.localSave = { state: 'saving', completed }
       await persist(true); check()
       for (let index = completed; index < task.urls.length; index++) {
-        const source = await readableMedia(task.urls[index]!, task.kind); check()
         const blob = task.kind === 'image' ? await readCreationImage(task.urls[index]!, controller.signal) : await (async () => {
+          const source = await readableMedia(task.urls[index]!, task.kind); check()
           const response = await fetch(source, { credentials: 'same-origin', signal: controller.signal })
           if (!response.ok) throw new Error('原文件下载失败，请重试保存。')
           return response.blob()
@@ -1448,6 +1479,7 @@ export async function moderateCreation(task: CreationTask, retry = false, conten
         controller.signal.throwIfAborted()
         let blob: Blob | undefined
         if (url === null) blob = new Blob([content], { type: 'text/markdown' })
+        else if (task.kind === 'image' && /^(?:studio-asset:|legacy-gallery:)/.test(url)) blob = await readCreationImage(url, controller.signal)
         else {
           const source = await readableMedia(url!, task.kind)
           blob = await imageBlob(source)
@@ -1537,13 +1569,16 @@ async function preparePublication(task: CreationTask, title: string, destination
   const files = task.kind === 'text' ? publication.files ??= [...(task.publicationFiles || [])] : task.publicationFiles ??= []
   await persist(true); checkOwner()
   async function uploadMedia(url: string, kind: CreationKind, name: string) {
-    const source = await readableMedia(url, kind)
-    let blob = await imageBlob(source)
+    let blob = kind === 'image' && /^(?:studio-asset:|legacy-gallery:)/.test(url) ? await readCreationImage(url) : undefined
     if (!blob) {
-      if (source.startsWith('data:')) throw new Error('作品文件格式无效，请重新获取生成结果。')
-      const response = await fetch(source, { credentials: 'same-origin' })
-      if (!response.ok) throw new Error('生成文件读取失败，请稍后重试。')
-      blob = await response.blob()
+      const source = await readableMedia(url, kind)
+      blob = await imageBlob(source)
+      if (!blob) {
+        if (source.startsWith('data:')) throw new Error('作品文件格式无效，请重新获取生成结果。')
+        const response = await fetch(source, { credentials: 'same-origin' })
+        if (!response.ok) throw new Error('生成文件读取失败，请稍后重试。')
+        blob = await response.blob()
+      }
     }
     checkOwner()
     if (!blob.size || !blob.type.startsWith(`${kind}/`)) throw new Error('作品文件格式无效，请重新获取生成结果。')

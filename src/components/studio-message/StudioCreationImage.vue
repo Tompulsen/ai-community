@@ -6,9 +6,9 @@ const dimensions = new Map<string, { width: number; height: number }>()
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { RotateCw, SquarePen } from '@lucide/vue'
-import { forgetCreationImage, readCreationImage } from '../../native-studio'
+import { forgetCreationImage, mediaSource, readCreationImage } from '../../native-studio'
 
-const props = defineProps<{ src: string; alt: string; label: string; editable?: boolean }>()
+const props = defineProps<{ src: string; alt: string; label: string; editable?: boolean; thumbnail?: boolean }>()
 const emit = defineEmits<{ open: []; edit: [] }>()
 const size = ref(dimensions.get(props.src))
 const loaded = ref(false), failed = ref(false), retrying = ref(false), replacement = ref('')
@@ -21,7 +21,7 @@ function clearImage() {
   replacement.value = ''; fallback.value = ''
 }
 function release() { observer?.disconnect(); clearImage() }
-watch([() => props.src, element], () => {
+watch([() => props.src, () => props.thumbnail, element], () => {
   revision++; release(); size.value = dimensions.get(props.src); loaded.value = false; failed.value = false; retrying.value = false
   if (!props.src || !element.value) return
   const accepted = revision
@@ -41,7 +41,7 @@ function load(event: Event) {
   if (image.getAttribute('src') !== (replacement.value || fallback.value)) return
   if (image.naturalWidth && image.naturalHeight) {
     size.value = { width: image.naturalWidth, height: image.naturalHeight }
-    dimensions.set(props.src, size.value)
+    if (!props.thumbnail) dimensions.set(props.src, size.value)
     if (dimensions.size > 200) dimensions.delete(dimensions.keys().next().value!)
   }
   loaded.value = true; failed.value = false
@@ -52,32 +52,33 @@ async function read(retry = false) {
   if (/^(?:blob:|data:)/.test(props.src)) { fallback.value = props.src; return }
   retrying.value = retry
   try {
-    const blob = await readCreationImage(props.src, current.signal)
+    const blob = await readCreationImage(props.src, current.signal, props.thumbnail)
     if (current.signal.aborted || accepted !== revision) return
     if (replacement.value) URL.revokeObjectURL(replacement.value)
     replacement.value = URL.createObjectURL(blob); failed.value = false; loaded.value = false
   } catch (cause) {
     if (current.signal.aborted || accepted !== revision) return
-    if ((cause as { status?: number }).status === 0) fallback.value = props.src
+    if ((cause as { status?: number }).status === 0) fallback.value = mediaSource(props.src, props.thumbnail) || ''
     else failed.value = true
   }
   finally { if (accepted === revision) retrying.value = false }
 }
 function imageFailed(event: Event) {
   if ((event.target as HTMLImageElement).getAttribute('src') !== (replacement.value || fallback.value)) return
-  forgetCreationImage(props.src); failed.value = true
+  forgetCreationImage(props.src, props.thumbnail); failed.value = true
 }
 function retry() {
   if (retrying.value) return
   clearImage()
-  forgetCreationImage(props.src); failed.value = false; loaded.value = false
+  forgetCreationImage(props.src, props.thumbnail); failed.value = false; loaded.value = false
   return read(true)
 }
 </script>
 
 <template>
-  <div ref="element" class="creation-image">
+  <div ref="element" class="creation-image" :class="{ 'creation-image-thumbnail': thumbnail }">
     <button v-if="failed" class="image-retry" type="button" :disabled="retrying" aria-label="重新加载图片" @click="retry"><RotateCw :size="18" /><span>{{ retrying ? '正在加载' : '重新加载图片' }}</span></button>
+    <img v-else-if="thumbnail" :src="replacement || fallback || undefined" :alt="alt" width="72" height="72" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
     <button v-else type="button" class="creation-image-preview" :aria-label="label" :aria-busy="!loaded" @click="emit('open')">
       <img :key="replacement || fallback" :src="replacement || fallback || undefined" :alt="alt" :width="size?.width" :height="size?.height" :style="size ? { width: `min(${size.width}px, calc(var(--creation-image-height) * ${size.width / size.height}))`, aspectRatio: `${size.width} / ${size.height}` } : undefined" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
     </button>
@@ -96,6 +97,9 @@ function retry() {
 .creation-image-preview:focus-visible, .image-retry:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .image-retry { display: flex; align-items: center; justify-content: center; gap: 8px; width: min(320px, 100%); min-height: 160px; padding: 16px; border: 0; border-radius: 6px; background: var(--surface-soft); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; }
 .image-retry:disabled { cursor: default; opacity: .6; }
+.creation-image-thumbnail, .creation-image-thumbnail > img { width: 72px; height: 72px; flex: none; }
+.creation-image-thumbnail > img { display: block; object-fit: cover; border-radius: 6px; }
+.creation-image-thumbnail .image-retry { width: 72px; min-height: 72px; padding: 4px; font-size: 11px; flex-direction: column; gap: 4px; }
 @media (min-width: 1000px) { .creation-image { --creation-image-height: min(340px, 26dvh); } }
 @media (max-width: 639px) { .creation-image { --creation-image-height: 36dvh; } }
 </style>

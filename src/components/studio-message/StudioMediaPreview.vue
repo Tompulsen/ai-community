@@ -28,11 +28,12 @@ const stage = ref<HTMLElement>(), picture = ref<HTMLImageElement>()
 const opened = ref(false), index = ref(0), scale = ref(1), offset = ref({ x: 0, y: 0 })
 const loading = ref(true), failed = ref(false), attempt = ref(0), actionError = ref('')
 const imageSource = ref(''), previewReady = ref(false), previewFailed = ref(false)
+const localPreview = ref('')
 const action = ref<'download' | 'copy'>()
 const current = computed(() => props.items[index.value])
 function safeSource(value: string | undefined, kind: 'image' | 'video', original = true) {
   if (!value) return
-  if (value.startsWith('studio-asset:') || value.startsWith('legacy-gallery:')) return mediaSource(value, false, kind)
+  if (value.startsWith('studio-asset:') || value.startsWith('legacy-gallery:')) return kind === 'image' && original ? value : mediaSource(value, !original, kind)
   try {
     const url = new URL(value, location.href)
     if (url.protocol === 'blob:') return value
@@ -42,7 +43,7 @@ function safeSource(value: string | undefined, kind: 'image' | 'video', original
 }
 const source = computed(() => safeSource(current.value?.src, current.value?.kind || 'image'))
 const previewSource = computed(() => {
-  const value = safeSource(current.value?.previewSrc, 'image', false)
+  const value = /^(?:studio-asset:|legacy-gallery:)/.test(current.value?.previewSrc || '') ? localPreview.value : safeSource(current.value?.previewSrc, 'image', false)
   return value !== source.value && !previewFailed.value ? value : undefined
 })
 const displayedImage = computed(() => imageSource.value || previewSource.value)
@@ -174,7 +175,8 @@ function failedMedia() { clearTimeout(imageTimer); endPan(); loading.value = fal
 function releaseImage() {
   imageOperation++; imageController?.abort(); imageController = undefined; clearTimeout(imageTimer)
   if (imageSource.value.startsWith('blob:')) URL.revokeObjectURL(imageSource.value)
-  imageSource.value = ''
+  if (localPreview.value) URL.revokeObjectURL(localPreview.value)
+  imageSource.value = ''; localPreview.value = ''
 }
 async function loadImage() {
   releaseImage(); previewReady.value = false; previewFailed.value = false
@@ -190,6 +192,11 @@ async function loadImage() {
   }
   const controller = new AbortController()
   imageController = controller
+  if (/^(?:studio-asset:|legacy-gallery:)/.test(current.value?.previewSrc || '')) {
+    void readCreationImage(current.value!.previewSrc!, controller.signal, true).then(blob => {
+      if (!controller.signal.aborted && accepted === imageOperation) localPreview.value = URL.createObjectURL(blob)
+    }).catch(() => {})
+  }
   try {
     const blob = await readCreationImage(source.value, controller.signal)
     if (controller.signal.aborted || accepted !== imageOperation) return
@@ -283,11 +290,15 @@ watch(canvasScope, () => close())
 onBeforeUnmount(() => { release(); dialog.value?.close() })
 async function defaultDownload(item: NonNullable<typeof current.value>, controller: AbortController, accepted: number, format?: ImageDownloadChoice) {
   if (!item.src) throw new Error('文件正在加载，请稍后重试。')
-  const readable = item.src.startsWith('blob:') || item.src.startsWith('data:') ? item.src : await readableMedia(item.src, item.kind)
-  if (controller.signal.aborted || accepted !== operation || acceptedOwner !== session.user?.id) return
-  const response = await fetch(format ? imageDownloadUrl(readable, format) : readable, { credentials: 'same-origin', signal: controller.signal })
-  if (!response.ok) throw new Error('文件下载失败，请重试。')
-  let blob = await response.blob()
+  let blob: Blob
+  if (item.kind === 'image' && /^(?:studio-asset:|legacy-gallery:)/.test(item.src)) blob = await readCreationImage(item.src, controller.signal)
+  else {
+    const readable = item.src.startsWith('blob:') || item.src.startsWith('data:') ? item.src : await readableMedia(item.src, item.kind)
+    if (controller.signal.aborted || accepted !== operation || acceptedOwner !== session.user?.id) return
+    const response = await fetch(format ? imageDownloadUrl(readable, format) : readable, { credentials: 'same-origin', signal: controller.signal })
+    if (!response.ok) throw new Error('文件下载失败，请重试。')
+    blob = await response.blob()
+  }
   if (!blob.size || !blob.type.startsWith(`${item.kind}/`)) throw new Error('文件格式无效，请重新加载。')
   if (item.kind === 'image' && format) blob = await imageDownload(blob, format, controller.signal)
   if (controller.signal.aborted || accepted !== operation || acceptedOwner !== session.user?.id) return

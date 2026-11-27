@@ -9,6 +9,7 @@ import { errorMessage, notify } from '../../state'
 import { addFallbackPopover, removeFallbackPopover, supportsNativePopover } from '../../studio-popover-fallback'
 const props = defineProps<{ items: StudioMenuAction[]; label?: string }>()
 const panel = ref<HTMLElement>(), visible = ref(false)
+const mounted = ref(false)
 const portalTarget = ref<string | HTMLElement>('body')
 const position = ref({ left: '8px', top: '8px' })
 const nativePopover = supportsNativePopover()
@@ -19,8 +20,13 @@ function close() {
   if (nativePopover) panel.value?.hidePopover()
   else {
     if (panel.value) removeFallbackPopover(panel.value)
-    visible.value = false
   }
+  visible.value = false; mounted.value = false
+}
+function toggle(event: Event) {
+  if (!nativePopover || event.target !== panel.value) return
+  visible.value = panel.value.matches(':popover-open')
+  if (!visible.value) { opening++; mounted.value = false }
 }
 async function open(event: MouseEvent) {
   if ((event.target as Element)?.closest('input, textarea, select, [contenteditable="true"]')) return
@@ -28,6 +34,7 @@ async function open(event: MouseEvent) {
   origin = event.currentTarget as HTMLElement
   const request = ++opening
   portalTarget.value = origin.closest<HTMLDialogElement>('dialog[open]') || 'body'
+  mounted.value = true
   await nextTick()
   if (request !== opening || !origin.isConnected) return
   if (!panel.value) return
@@ -72,7 +79,7 @@ onBeforeUnmount(close)
 defineExpose({ open, close, visible })
 </script>
 <template>
-  <Teleport :to="portalTarget"><div ref="panel" :popover="nativePopover ? 'auto' : undefined" :hidden="!nativePopover && !visible" class="message-context-menu" :class="{ 'studio-popover-fallback': !nativePopover }" :style="position" role="menu" :aria-label="label || '消息操作'" @toggle="nativePopover && (visible = ($event as ToggleEvent).newState === 'open')" @keydown="keys">
+  <Teleport v-if="mounted" :to="portalTarget"><div ref="panel" :popover="nativePopover ? 'auto' : undefined" :hidden="!nativePopover && !visible" class="message-context-menu" :class="{ 'studio-popover-fallback': !nativePopover }" :style="position" role="menu" :aria-label="label || '消息操作'" @toggle="toggle" @keydown="keys">
     <button v-for="item in props.items" :key="item.label" type="button" role="menuitem" :aria-label="item.label" :disabled="item.disabled" :class="{ danger: item.danger }" @click="select(item)"><component :is="item.icon" :size="16" aria-hidden="true" /><span>{{ item.text || item.label }}</span></button>
   </div></Teleport>
 </template>

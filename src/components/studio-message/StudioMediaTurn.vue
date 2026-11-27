@@ -159,7 +159,7 @@ async function remove() {
       </template>
     </template>
     <template v-if="role === 'user'">
-      <div class="creation-request-body message-bubble"><p>{{ task.prompt }}</p><div v-if="task.references.length" class="sent-references"><template v-for="(file, index) in task.references" :key="file.url"><video v-if="file.type?.startsWith('video/')" :src="mediaSource(file.url, false, 'video')" :aria-label="`源视频：${file.name}`" width="240" height="135" controls playsinline preload="metadata" loading="lazy" /><audio v-else-if="file.type?.startsWith('audio/')" :src="mediaSource(file.url, false, 'video')" :aria-label="`参考音频：${file.name}`" controls preload="metadata" /><img v-else :src="mediaSource(file.url, true)" :alt="`参考图 ${index + 1}：${file.name}`" loading="lazy" /></template></div></div>
+      <div class="creation-request-body message-bubble"><p>{{ task.prompt }}</p><div v-if="task.references.length" class="sent-references"><template v-for="(file, index) in task.references" :key="file.url"><video v-if="file.type?.startsWith('video/')" :src="mediaSource(file.url, false, 'video')" :aria-label="`源视频：${file.name}`" width="240" height="135" controls playsinline preload="metadata" loading="lazy" /><audio v-else-if="file.type?.startsWith('audio/')" :src="mediaSource(file.url, false, 'video')" :aria-label="`参考音频：${file.name}`" controls preload="metadata" /><StudioCreationImage v-else :src="file.url" :alt="`参考图 ${index + 1}：${file.name}`" label="" thumbnail /></template></div></div>
       <StudioMessageActions class="creation-turn-tools message-actions" label="提问操作" :actions="actions" />
     </template>
     <template v-else>
@@ -174,7 +174,7 @@ async function remove() {
           <div v-if="videoErrors[url]" class="video-load-error" role="status"><p>视频加载失败</p><button class="studio-tool" type="button" @click="retryVideo(url)"><RefreshCw :size="16" />重新加载视频</button></div>
           <button class="icon-button video-expand" type="button" title="放大视频" aria-label="放大视频" @click="emit('preview', task, index)"><Maximize :size="17" /></button>
         </template>
-        <StudioCreationImage v-else :src="mediaSource(url, false) || ''" :alt="task.prompt" :label="`查看大图：预览生成图片 ${index + 1}`" editable @open="emit('preview', task, index)" @edit="emit('preview', task, index, true)" />
+        <StudioCreationImage v-else :src="url" :alt="task.prompt" :label="`查看大图：预览生成图片 ${index + 1}`" editable @open="emit('preview', task, index)" @edit="emit('preview', task, index, true)" />
       </figure></div>
       <div v-else-if="task.text" class="creation-text"><pre>{{ task.text }}</pre></div>
       <StudioBrowserSave :task="task" />
