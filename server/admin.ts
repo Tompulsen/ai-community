@@ -10,7 +10,7 @@ import { accountCenter } from './account-session.ts'
 import { communityAdKeys, normalizeCommunityAd, type CommunityAd } from './business/ads.ts'
 import { legacyIdTime } from './content.ts'
 import { readImageConcurrencySettings, readModerationSettings, readSiteSettings, validateImageConcurrencySettings, validateModerationSettings, validateSiteBranding, validateSiteSettings, type ModerationSettings } from './settings.ts'
-import { IMAGE_CONCURRENCY_GLOBAL_MAX, IMAGE_CONCURRENCY_USER_MAX, type ImageConcurrencySettings } from '../shared/studio/image-concurrency.ts'
+import { IMAGE_CONCURRENCY_GLOBAL_MAX, IMAGE_CONCURRENCY_USER_MAX, type ImageConcurrencySettings, type ImageConcurrencyUserFilters } from '../shared/studio/image-concurrency.ts'
 import { requestStoreEnabled } from './creation/request-store.ts'
 import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
 import { modelTypesSchema, readModelTypes } from '../shared/studio/model-types.ts'
@@ -137,6 +137,101 @@ async function imageConcurrency(ctx: RequestContext, userId?: string) {
         : { before: { defaultLimit: previous.defaultLimit, globalLimit: previous.globalLimit }, after: defaults })
     }
     return imageConcurrencyResponse(next, user)
+  })
+}
+function imageConcurrencyFilters(input: unknown): ImageConcurrencyUserFilters {
+  if (!record(input) || Object.keys(input).some(key => !['query', 'status', 'mode'].includes(key))) fail('用户筛选条件无效。')
+  return { query: text(input.query ?? '', 120),
+    status: enumValue(input.status ?? 'all', ['all', 'active', 'suspended']) as ImageConcurrencyUserFilters['status'],
+    mode: enumValue(input.mode ?? 'all', ['all', 'default', 'override']) as ImageConcurrencyUserFilters['mode'] }
+}
+async function imageConcurrencyUsers(ctx: RequestContext) {
+  const reading = ctx.req.method === 'GET'
+  const filters = imageConcurrencyFilters(reading ? {
+    query: ctx.url.searchParams.get('query') ?? '', status: ctx.url.searchParams.get('status') ?? 'all', mode: ctx.url.searchParams.get('mode') ?? 'all',
+  } : ctx.body.filters)
+  let selectedIds: string[] | null = null, overrideLimit: number | null = null
+  if (!reading) {
+    if (ctx.req.headers?.['x-new-api-user'] !== ctx.requireAdmin().id) fail('登录账号已变化，请刷新后重新核对。', 409)
+    keys(ctx.body, ['selection', 'filters', 'overrideLimit', 'version'])
+    if (typeof ctx.body.version !== 'string' || !/^[a-f0-9]{64}$/.test(ctx.body.version)) fail('缺少有效版本，请刷新后重试。')
+    const selection = ctx.body.selection
+    if (!record(selection)) fail('请选择需要调整的用户。')
+    if (selection.type === 'ids') {
+      keys(selection, ['type', 'ids'])
+      if (!Array.isArray(selection.ids) || !selection.ids.length) fail('请选择需要调整的用户。')
+      selectedIds = selection.ids.map(identifier)
+      if (new Set(selectedIds).size !== selectedIds.length) fail('所选用户不能重复。')
+    } else if (selection.type === 'all') keys(selection, ['type'])
+    else fail('用户选择方式无效。')
+    overrideLimit = ctx.body.overrideLimit === null ? null : integer(ctx.body.overrideLimit, 1, IMAGE_CONCURRENCY_USER_MAX)
+    if (!requestStoreEnabled()) fail('图片并发设置需要启用持久化请求服务，请联系维护人员。', 503)
+  }
+  const select = async (db: Queryable, settings: ImageConcurrencySettings, lock = false) => {
+    const rows = (await db.query<{ id: string; username: string; name: string | null; host: null; isSuspended: boolean }>(
+      `SELECT u.id,u.username,u.name,u.host,u."isSuspended" FROM "user" u
+       WHERE u.host IS NULL AND NOT u."isDeleted"
+       AND ($1='' OR u.id=$1 OR u.username ILIKE $2 OR u.name ILIKE $2
+         OR EXISTS (SELECT 1 FROM external_account e WHERE e."userId"=u.id AND e.issuer=$3 AND (e.username ILIKE $2 OR e.subject=$1)))
+       AND ($4='all' OR u."isSuspended"=($4='suspended'))
+       AND ($5='all' OR ($6::jsonb ? u.id)=($5='override'))
+       ORDER BY u.id DESC${lock ? ' FOR SHARE OF u' : ''}`,
+      [filters.query, search(filters.query), accountCenter(ctx.config), filters.status, filters.mode, JSON.stringify(settings.userOverrides)])).rows
+    const version = fingerprint({ filters, defaultLimit: settings.defaultLimit, globalLimit: settings.globalLimit,
+      users: rows.map(row => ({ ...row, overrideLimit: settings.userOverrides[row.id] ?? null })) })
+    return { rows, version }
+  }
+  if (reading) {
+    const settings = readImageConcurrencySettings((await meta(ctx.db)).clientOptions?.communityImageConcurrency)
+    const { rows, version } = await select(ctx.db, settings)
+    let start = 0
+    const value = ctx.url.searchParams.get('cursor')
+    if (value) {
+      let after: Body
+      try {
+        if (value.length > 300 || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error()
+        const parsed: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
+        if (!record(parsed) || typeof parsed.version !== 'string' || !/^[a-f0-9]{64}$/.test(parsed.version)) throw new Error()
+        identifier(parsed.id); after = parsed
+      } catch { fail('分页条件无效，请刷新用户列表。') }
+      if (after.version !== version) fail('用户列表已变化，请刷新后重新选择。', 409)
+      start = rows.findIndex(row => row.id === after.id) + 1
+      if (!start) fail('分页条件无效，请刷新用户列表。')
+    }
+    const page = rows.slice(start, start + 30), identities = await readPublicIdentities(ctx, page.map(row => row.id))
+    return { items: page.map(row => {
+      const identity = identities.get(row.id), username = identity?.username || row.username
+      return { ...imageConcurrencyResponse(settings, row), id: row.id, username, name: row.name || username || '章鱼用户',
+        ...(identity ? { accountId: identity.accountId } : {}), isSuspended: row.isSuspended }
+    }), total: rows.length, nextCursor: start + page.length < rows.length
+      ? Buffer.from(JSON.stringify({ id: page.at(-1)!.id, version })).toString('base64url') : null,
+    selectionVersion: version, filters, defaultLimit: settings.defaultLimit, globalLimit: settings.globalLimit }
+  }
+  return transaction(ctx.db, async db => {
+    const row = await meta(db, true), previous = readImageConcurrencySettings(row.clientOptions?.communityImageConcurrency)
+    // Lock the current matching accounts and bind every page to the same range before any write.
+    const { rows, version } = await select(db, previous, true)
+    if (ctx.body.version !== version) fail('用户列表或图片额度已变化，请刷新后重新选择。', 409)
+    const selected = selectedIds ? new Set(selectedIds) : null
+    const targets = selected ? rows.filter(user => selected.has(user.id)) : rows
+    if (selected && targets.length !== selected.size) fail('所选账号不存在、不可编辑或已不符合筛选条件。', 409)
+    if (!targets.length) fail('当前筛选条件下没有可调整的用户。')
+    const changes = targets.flatMap(user => {
+      const before = previous.userOverrides[user.id] ?? null
+      return before === overrideLimit ? [] : [{ userId: user.id, before, after: overrideLimit }]
+    })
+    if (changes.length) {
+      const userOverrides = { ...previous.userOverrides }
+      for (const change of changes) {
+        if (overrideLimit === null) delete userOverrides[change.userId]
+        else userOverrides[change.userId] = overrideLimit
+      }
+      const next = validateImageConcurrencySettings({ ...previous, userOverrides })
+      await db.query(`UPDATE meta SET "clientOptions"=COALESCE("clientOptions",'{}'::jsonb)||$2::jsonb WHERE id=$1`, [row.id, JSON.stringify({ communityImageConcurrency: next })])
+      await audit(ctx, db, 'updateUserImageConcurrencyBatch', { selectionType: selected ? 'ids' : 'all', selectedCount: targets.length,
+        updatedCount: changes.length, after: overrideLimit, changes })
+    }
+    return { selectedCount: targets.length, updatedCount: changes.length }
   })
 }
 function publicConfig(options: Body) {
@@ -585,6 +680,7 @@ function packAnnouncement(row: AnnouncementRow) {
 
 const auditLabels: Record<string, string> = {
   updateImageConcurrency: '调整图片并发默认设置', updateUserImageConcurrency: '调整用户图片并发上限',
+  updateUserImageConcurrencyBatch: '批量调整用户图片并发上限',
   updateUserModerationNote: '更新管理笔记', clearUserProfileMedia: '清除资料图片',
   createAnnouncement: '发布公告', updateAnnouncement: '修改公告', deleteAnnouncement: '停用公告',
   communityWorkEdit: '编辑作品', communityWorkDelete: '删除作品', communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解除封禁', resolveAbuseReport: '处理举报',
@@ -604,6 +700,9 @@ function safeAuditDetails(type: string, input: unknown): Body {
   if (type === 'updateUserImageConcurrency') {
     copyId('userId')
     for (const key of ['before', 'after']) { if (input[key] === null) result[key] = null; else copyNumber(key) }
+  } else if (type === 'updateUserImageConcurrencyBatch') {
+    copyEnum('selectionType', ['ids', 'all']); copyNumber('selectedCount'); copyNumber('updatedCount')
+    if (input.after === null) result.after = null; else copyNumber('after')
   } else if (type === 'updateImageConcurrency') {
     for (const key of ['before', 'after']) if (record(input[key])) {
       const value = input[key] as Body
@@ -753,12 +852,13 @@ export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
   const userRoles = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/roles$/.exec(path)
   const userImageConcurrency = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/image-concurrency$/.exec(path)
   const userSection = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/(note|media|logins)$/.exec(path)
-  const recognized = ['/api/admin/models', '/api/admin/welfare/tasks', '/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles', '/api/admin/creation/image-concurrency'].includes(path) || tag || person || report || announcement || userRoles || userSection || userImageConcurrency
+  const recognized = ['/api/admin/models', '/api/admin/welfare/tasks', '/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles', '/api/admin/creation/image-concurrency', '/api/admin/creation/image-concurrency/users'].includes(path) || tag || person || report || announcement || userRoles || userSection || userImageConcurrency
   if (!recognized) return false
   if (path === '/api/admin/reports' || report) { const actor = ctx.requireUser(); if (!actor.isAdmin && !actor.isModerator) fail('需要审核员权限。', 403) }
   else ctx.requireAdmin()
   let result: unknown
   if ((path === '/api/admin/creation/image-concurrency' || userImageConcurrency) && ['GET', 'PATCH'].includes(method ?? '')) result = await imageConcurrency(ctx, userImageConcurrency?.[1])
+  else if (path === '/api/admin/creation/image-concurrency/users' && ['GET', 'PATCH'].includes(method ?? '')) result = await imageConcurrencyUsers(ctx)
   else if (path === '/api/admin/models' && ['GET', 'PATCH'].includes(method ?? '')) result = await modelSettings(ctx)
   else if (path === '/api/admin/welfare/tasks' && ['GET', 'PATCH'].includes(method ?? '')) result = await welfareTasks(ctx)
   else if (path === '/api/admin/community/config' && ['GET', 'PATCH'].includes(method ?? '')) result = await config(ctx)

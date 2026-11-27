@@ -4,7 +4,8 @@ import { RefreshCw, Save } from '@lucide/vue'
 import { api, errorMessage, notify, session } from '../state'
 import { IMAGE_CONCURRENCY_GLOBAL_MAX, IMAGE_CONCURRENCY_USER_MAX, type ImageConcurrencyConfig, type UserImageConcurrencyConfig } from '../../shared/studio/image-concurrency'
 
-const props = defineProps<{ userId?: string; confirmLeave: () => boolean | Promise<boolean> }>()
+const props = defineProps<{ userId?: string; disabled?: boolean; confirmLeave: () => boolean | Promise<boolean> }>()
+const emit = defineEmits<{ saved: [] }>()
 const config = ref<ImageConcurrencyConfig | UserImageConcurrencyConfig>()
 const defaultLimit = ref<string | number>(''), globalLimit = ref<string | number>(''), overrideLimit = ref<string | number>(''), mode = ref('default')
 const loading = ref(false), saving = ref(false), error = ref(''), showValidation = ref(false)
@@ -22,7 +23,7 @@ const hasUnsavedChanges = computed(() => canEdit.value && (props.userId
   ? (mode.value === 'default' ? null : Number(overrideLimit.value)) !== userConfig.value?.overrideLimit
   : Number(defaultLimit.value) !== config.value?.defaultLimit || Number(globalLimit.value) !== config.value?.globalLimit))
 const busy = computed(() => loading.value || saving.value)
-defineExpose({ hasUnsavedChanges, busy })
+defineExpose({ hasUnsavedChanges, busy, reload: load })
 
 function apply(value: ImageConcurrencyConfig | UserImageConcurrencyConfig) {
   if (!Number.isInteger(value.defaultLimit) || !Number.isInteger(value.globalLimit) || typeof value.version !== 'string'
@@ -45,7 +46,7 @@ async function load() {
   finally { if (isCurrent() && current === revision) loading.value = false }
 }
 async function save() {
-  if (busy.value || !canEdit.value || !isCurrent() || !hasUnsavedChanges.value) return
+  if (busy.value || props.disabled || !canEdit.value || !isCurrent() || !hasUnsavedChanges.value) return
   showValidation.value = true; error.value = ''
   if (props.userId ? overrideError.value : defaultError.value || globalError.value) return
   const current = ++revision
@@ -55,21 +56,22 @@ async function save() {
       : { defaultLimit: Number(defaultLimit.value), globalLimit: Number(globalLimit.value), version: config.value!.version }
     const value = await api<ImageConcurrencyConfig | UserImageConcurrencyConfig>(endpoint, { method: 'PATCH', expectedAccount: owner, signal: controller.signal, body })
     if (!isCurrent() || current !== revision) return
-    apply(value); notify(props.userId ? '此用户的图片生成并发设置已保存。' : '图片生成并发设置已保存。')
+    apply(value); notify(props.userId ? '此用户的图片生成并发设置已保存。' : '图片生成并发设置已保存。'); emit('saved')
   } catch (cause) { if (isCurrent() && current === revision) error.value = `${errorMessage(cause)} 你的输入仍保留，可重新读取后核对。` }
   finally { if (isCurrent() && current === revision) saving.value = false }
 }
-function toggle(event: Event) { if ((event.target as HTMLDetailsElement).open && !config.value && !busy.value) void load() }
+void load()
 onBeforeUnmount(() => { active = false; revision++; controller.abort() })
 </script>
 
 <template>
-  <details class="image-concurrency" @toggle="toggle">
-    <summary>{{ userId ? '此用户的图片生成并发' : '图片生成并发设置' }}</summary>
+  <section class="image-concurrency" :aria-labelledby="`${id}-heading`">
+    <h3 :id="`${id}-heading`">{{ userId ? '此用户的图片生成并发' : '默认与社区并发' }}</h3>
     <div class="concurrency-content">
       <p :id="`${id}-help`" class="form-note">用户按同时生成的图片张数计数，社区按请求数计数；一次请求可包含多张图。</p>
       <p v-if="loading" class="form-note" role="status">正在读取并发设置…</p>
       <form v-if="config" class="concurrency-form" :aria-label="userId ? '用户图片生成并发' : '默认图片生成并发'" novalidate @submit.prevent="save">
+        <fieldset class="concurrency-form concurrency-fieldset" :disabled="busy || disabled">
         <template v-if="!userId">
           <div class="concurrency-fields">
             <label class="field"><span :id="`${id}-default-label`">默认用户同时生成图片数</span><input v-model="defaultLimit" class="control" type="number" inputmode="numeric" min="1" :max="IMAGE_CONCURRENCY_USER_MAX" step="1" required :disabled="busy" :aria-labelledby="`${id}-default-label`" :aria-invalid="showValidation && !!defaultError" :aria-describedby="`${id}-default-error ${id}-help`" @blur="showValidation = true" /><span :id="`${id}-default-error`" class="form-error">{{ showValidation ? defaultError : '' }}</span></label>
@@ -86,16 +88,18 @@ onBeforeUnmount(() => { active = false; revision++; controller.abort() })
         </template>
         <p :id="`${id}-global-help`" class="form-note">任务结束后释放名额；结果待确认时保留至查明结果或超时。更改仅影响后续请求。</p>
         <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-        <div class="concurrency-actions"><button v-if="canEdit" class="button primary btn" :disabled="busy || !hasUnsavedChanges"><Save :size="16" aria-hidden="true" />{{ saving ? '正在保存…' : userId ? '保存用户并发' : '保存默认与社区并发' }}</button><button type="button" class="button subtle btn" :disabled="busy" @click="load"><RefreshCw :size="16" aria-hidden="true" />重新读取并发设置</button></div>
+        <div class="concurrency-actions"><button v-if="canEdit" class="button primary btn" :disabled="busy || disabled || !hasUnsavedChanges"><Save :size="16" aria-hidden="true" />{{ saving ? '正在保存…' : userId ? '保存用户并发' : '保存默认与社区并发' }}</button><button type="button" class="button subtle btn" :disabled="busy || disabled" @click="load"><RefreshCw :size="16" aria-hidden="true" />重新读取并发设置</button></div>
+        </fieldset>
       </form>
       <div v-else-if="error"><p class="form-error" role="alert">{{ error }}</p><button class="button subtle btn" :disabled="busy" @click="load">重新读取并发设置</button></div>
     </div>
-  </details>
+  </section>
 </template>
 
 <style scoped>
-.image-concurrency { margin-block: 24px; border-block: 1px solid var(--border); }
-.image-concurrency summary { min-height: 44px; padding: 16px 0; color: var(--ink); cursor: pointer; font-size: 14px; font-weight: 600; }
+.image-concurrency { min-width: 0; }
+.image-concurrency h3 { margin-bottom: 16px; font-size: 16px; font-weight: 600; }
+.concurrency-fieldset { margin: 0; padding: 0; border: 0; }
 .concurrency-content, .concurrency-form { display: grid; gap: 16px; min-width: 0; }
 .concurrency-content { padding-bottom: 20px; }
 .concurrency-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }

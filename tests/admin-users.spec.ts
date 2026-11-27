@@ -28,6 +28,7 @@ async function fixture(page: Page) {
       return route.fulfill({ json: { user: person } })
     }
     reads.push(url)
+    if (path === '/api/admin/overview') return route.fulfill({ json: { counts: { pending: 0, published: 0, rejected: 0, reports: 0 }, period: { days: 7, from: '2026-11-20', to: '2026-11-27', newWorks: 0 }, updatedAt: '2026-11-27T00:00:00Z' } })
     if (path === '/api/admin/users') {
       if (state.failList) return route.fulfill({ status: 503, json: { message: '用户列表加载失败' } })
       const remote = url.searchParams.get('origin') === 'remote'
@@ -156,7 +157,7 @@ test('delayed note saves cannot affect a switched or demoted account', async ({ 
   await page.goto('/admin?tab=users&user=17'); await page.getByLabel('管理笔记').fill('old draft')
   await page.getByRole('button', { name: '保存笔记', exact: true }).click(); await expect.poll(() => started).toBe(true)
   f.account.state.user.id = 'newAccount'; f.account.state.user.isAdmin = false; f.account.state.user.isModerator = true
-  await page.evaluate(async () => { const state = await import('/src/state.ts'); await state.loadSession(true) })
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(page.getByRole('heading', { name: '管理概览', exact: true })).toBeVisible()
   release(); await page.waitForTimeout(150)
   await expect(page.getByLabel('管理笔记')).toHaveCount(0)

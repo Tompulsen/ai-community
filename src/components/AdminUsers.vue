@@ -3,7 +3,6 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { ArrowLeft, ArrowUpRight, Ban, Check, ChevronRight, Copy, ImageOff, RefreshCw, Save, Search, ShieldCheck, Users, X } from '@lucide/vue'
 import { accountCenterUrl, api, errorMessage, notify, queryString, session } from '../state'
-import AdminImageConcurrency from './AdminImageConcurrency.vue'
 
 interface User {
   id: string; accountId?: string; name: string; username: string; host: string | null
@@ -27,10 +26,8 @@ const action = ref<Action>('suspend'), reason = ref(''), actionError = ref(''), 
 let actionUserId = ''
 const selectedId = computed(() => typeof route.query.user === 'string' ? route.query.user : '')
 const centerUrl = computed(() => accountCenterUrl())
-const defaultConcurrency = ref<InstanceType<typeof AdminImageConcurrency>>(), userConcurrency = ref<InstanceType<typeof AdminImageConcurrency>>()
 const noteDirty = computed(() => !!detail.value && note.value !== detail.value.moderationNote)
-const hasUnsavedChanges = computed(() => noteDirty.value || !!defaultConcurrency.value?.hasUnsavedChanges || !!userConcurrency.value?.hasUnsavedChanges)
-const anyBusy = computed(() => busy.value || !!defaultConcurrency.value?.busy || !!userConcurrency.value?.busy)
+const hasUnsavedChanges = noteDirty
 const canManage = computed(() => !!detail.value && !detail.value.host && !detail.value.isProtected)
 const actionTitle = computed(() => action.value === 'suspend' ? detail.value?.isSuspended ? '解除社区封禁' : '封禁社区账号' : action.value === 'avatar' ? '清除头像' : '清除横幅')
 const owner = session.user?.id, controller = new AbortController()
@@ -41,7 +38,7 @@ const dateText = (value: string | null) => value && Number.isFinite(Date.parse(v
 const handle = (user: User) => `@${user.username || user.id}${user.host ? `@${user.host}` : ''}`
 const imageFailed = (url: string) => brokenImages.value.add(url)
 const userLink = (id?: string) => ({ path: '/admin', query: { tab: 'users', ...(id ? { user: id } : {}) } })
-defineExpose({ hasUnsavedChanges, busy: anyBusy })
+defineExpose({ hasUnsavedChanges, busy })
 
 async function load(more = false) {
   if (!isCurrent() || loading.value || busy.value) return
@@ -70,7 +67,7 @@ async function loadDetail() {
   } catch (cause) { if (currentDetail(revision, id)) detailError.value = errorMessage(cause) }
   finally { if (currentDetail(revision, id)) detailLoading.value = false }
 }
-async function refreshDetail() { if (!anyBusy.value && (!hasUnsavedChanges.value || await props.confirmLeave())) await loadDetail() }
+async function refreshDetail() { if (!busy.value && (!hasUnsavedChanges.value || await props.confirmLeave())) await loadDetail() }
 async function saveNote() {
   const target = detail.value, revision = detailRevision
   if (!target?.canEditNote || busy.value || !isCurrent()) return
@@ -131,7 +128,7 @@ onBeforeUnmount(() => { active = false; controller.abort(); actionDialog.value?.
   <section class="panel-section admin-users">
     <div v-show="!selectedId">
       <div class="section-heading"><div><h2>用户管理</h2><p class="form-note">查找用户，查看账号资料与社区违规记录。</p></div><button class="button subtle btn" :disabled="loading || busy" @click="load()"><RefreshCw :size="16" aria-hidden="true" />刷新</button></div>
-      <AdminImageConcurrency v-if="!selectedId" ref="defaultConcurrency" :confirm-leave="confirmLeave" />
+      <p class="form-note">图片生成额度可在 <RouterLink :to="{ path: '/admin', query: { tab: 'image-concurrency' } }" class="text-link">图片并发</RouterLink> 中集中管理。</p>
       <form class="user-filters" aria-label="筛选用户" @submit.prevent="load()">
         <label class="field"><span>排序</span><select v-model="filters.sort" class="control" :disabled="loading" @change="load()"><option value="created-desc">创建时间 · 新到旧</option><option value="created-asc">创建时间 · 旧到新</option><option value="active-desc">活跃记录 · 最近优先</option><option value="active-asc">活跃记录 · 最早优先</option></select></label>
         <label class="field"><span>状态</span><select v-model="filters.status" class="control" :disabled="loading" @change="load()"><option value="all">全部</option><option value="active">正常</option><option value="suspended">已封禁</option></select></label>
@@ -153,14 +150,14 @@ onBeforeUnmount(() => { active = false; controller.abort(); actionDialog.value?.
       <div v-if="users.length" class="list-footer"><span class="form-note">已显示 {{ users.length }} 位用户</span><button v-if="nextCursor" class="button btn" :disabled="loading" @click="load(true)">加载更多用户</button></div>
     </div>
     <div v-if="selectedId" class="user-detail">
-      <div class="section-heading detail-toolbar"><RouterLink class="button subtle btn" :to="userLink()"><ArrowLeft :size="16" aria-hidden="true" />用户列表</RouterLink><button class="button subtle btn" :disabled="detailLoading || anyBusy" @click="refreshDetail"><RefreshCw :size="16" aria-hidden="true" />刷新详情</button></div>
+      <div class="section-heading detail-toolbar"><RouterLink class="button subtle btn" :to="userLink()"><ArrowLeft :size="16" aria-hidden="true" />用户列表</RouterLink><button class="button subtle btn" :disabled="detailLoading || busy" @click="refreshDetail"><RefreshCw :size="16" aria-hidden="true" />刷新详情</button></div>
       <p v-if="detailLoading" class="form-note" role="status">正在加载用户详情…</p><p v-if="detailError" class="form-error" role="alert">{{ detailError }}</p>
       <template v-if="detail">
         <div class="user-identity"><span class="user-avatar large" aria-hidden="true"><img v-if="detail.avatarUrl && !brokenImages.has(detail.avatarUrl)" :src="detail.avatarUrl" alt="" @error="imageFailed(detail.avatarUrl)" /><span v-else>{{ detail.name.slice(0, 1) }}</span></span><div><h2 ref="detailHeading" tabindex="-1">{{ detail.name }}</h2><p class="user-handle">{{ handle(detail) }}</p><span class="status" :class="detail.isSuspended ? 'rejected' : 'published'">{{ detail.isSuspended ? '已封禁' : '正常' }}</span></div></div>
         <dl class="user-facts"><dt>社区 ID</dt><dd><span>{{ detail.id }}</span><button class="icon-button" aria-label="复制社区 ID" @click="copyId(detail.id)"><Copy :size="16" aria-hidden="true" /></button></dd><dt>统一账号 ID</dt><dd>{{ detail.accountId || '未关联' }}</dd><dt>社区创建时间</dt><dd>{{ dateText(detail.createdAt) }}</dd><dt>最后活跃记录</dt><dd>{{ dateText(detail.lastActiveDate) }}<small>历史采集记录，当前未持续更新。</small></dd><dt>来源服务器</dt><dd>{{ detail.host || '本地' }}</dd><dt>邮箱与账号安全</dt><dd>{{ detail.host ? '由来源服务器管理' : '由章鱼账户中心管理' }}</dd></dl>
         <p v-if="detail.host" class="form-note">远程账号仅供查看，资料与安全设置由来源服务器管理。</p>
         <form class="user-note" @submit.prevent="saveNote"><label class="field"><span>管理笔记</span><textarea v-model="note" class="control" rows="4" maxlength="8192" :readonly="!detail.canEditNote" :disabled="busy" aria-describedby="user-note-help" /></label><div class="note-footer"><p id="user-note-help" class="form-note">仅管理员可见，用于记录处理依据与跟进事项。</p><button v-if="detail.canEditNote" class="button primary btn" :disabled="busy || !noteDirty"><Save :size="16" aria-hidden="true" />{{ busy ? '正在提交…' : '保存笔记' }}</button></div><p v-if="noteError" class="form-error" role="alert">{{ noteError }}</p></form>
-        <AdminImageConcurrency :key="detail.id" ref="userConcurrency" :user-id="detail.id" :confirm-leave="confirmLeave" />
+        <p v-if="!detail.host" class="form-note"><RouterLink :to="{ path: '/admin', query: { tab: 'image-concurrency', user: detail.id } }" class="text-link">管理此用户的图片并发</RouterLink></p>
         <section class="user-section" aria-labelledby="user-moderation-heading"><h3 id="user-moderation-heading">社区违规与封禁</h3><div class="violation-counts"><p>本轮违规 <strong>{{ Math.max(0, detail.violationCount - detail.violationBaseline) }}</strong></p><p>历史违规 <strong>{{ detail.violationCount }}</strong></p></div><p class="form-note">解封后保留历史记录，本轮违规次数归零。社区封禁不改变统一账号的其他服务权限。</p><p v-if="detail.isProtected" class="form-note">受保护管理账号，不能在此封禁或清除资料图片。</p><button v-if="!detail.host" class="button subtle btn" :disabled="!canManage || busy" @click="openAction('suspend')"><ShieldCheck v-if="detail.isSuspended" :size="16" aria-hidden="true" /><Ban v-else :size="16" aria-hidden="true" />{{ detail.isSuspended ? '解除社区封禁' : '封禁社区账号' }}</button></section>
         <details class="user-disclosure"><summary>角色与账号安全</summary><div class="stack"><p class="form-note">社区管理授权在“管理授权”中维护。密码重置、双重认证和账号注销由章鱼账户中心处理，需具备对应权限。</p><div class="detail-actions"><RouterLink v-if="!detail.host" class="button subtle btn" :to="{ path: '/admin', query: { tab: 'roles', query: detail.id } }"><ShieldCheck :size="16" aria-hidden="true" />查看管理授权</RouterLink><a v-if="!detail.host && centerUrl" :href="centerUrl" target="_blank" rel="noopener noreferrer" class="button subtle btn">章鱼账户中心<ArrowUpRight :size="16" aria-hidden="true" /></a></div></div></details>
         <details class="user-disclosure" @toggle="toggleLogins"><summary>社区登录记录与 IP</summary><div class="stack"><p class="form-note">每个统一账号会话记录一次社区登录，仅反映社区留存的记录。</p><p v-if="loginLoading" class="form-note" role="status">正在加载登录记录…</p><p v-if="loginError" class="form-error" role="alert">{{ loginError }} <button class="text-link" :disabled="loginLoading" @click="loadLogins()">重试</button></p><ul v-if="logins.length" class="login-list"><li v-for="login in logins" :key="login.id"><div><strong>{{ login.ip || 'IP 未记录' }}</strong><span>{{ login.success ? '成功' : '失败' }}</span><time>{{ dateText(login.date) }}</time></div><p>{{ login.userAgent || '设备信息未记录' }}</p></li></ul><p v-else-if="loginLoaded && !loginLoading" class="form-note">暂无社区登录记录。</p><button v-if="loginCursor" class="button subtle btn" :disabled="loginLoading" @click="loadLogins(true)">加载更多登录记录</button></div></details>

@@ -8,6 +8,8 @@ import { readImageConcurrencySettings, validateImageConcurrencySettings } from '
 import { IMAGE_CONCURRENCY_GLOBAL_MAX, IMAGE_CONCURRENCY_USER_MAX } from '../shared/studio/image-concurrency.ts'
 
 const globalPath = '/api/admin/creation/image-concurrency'
+const usersPath = `${globalPath}/users`
+const allFilters = { query: '', status: 'all', mode: 'all' }
 const userPath = id => `/api/admin/users/${id}/image-concurrency`
 const actor = { id: 'root1', isAdmin: true }
 
@@ -58,13 +60,14 @@ test('saving limits requires the durable request service and never silently enab
   const db = { query() { assert.fail('must not query') }, connect() { assert.fail('must not connect') } }
   await assert.rejects(request(db)(globalPath, 'PATCH', { defaultLimit: 4, globalLimit: 1000, version: 'a'.repeat(64) }), { statusCode: 503 })
   await assert.rejects(request(db)(userPath('user1'), 'PATCH', { overrideLimit: 4, version: 'a'.repeat(64) }), { statusCode: 503 })
+  await assert.rejects(request(db)(usersPath, 'PATCH', { selection: { type: 'all' }, filters: allFilters, overrideLimit: 4, version: 'a'.repeat(64) }), { statusCode: 503 })
 })
 
 test('image settings require an administrator, matching account and version before storage access', async () => {
   const db = { query() { assert.fail('must not query') }, connect() { assert.fail('must not connect') } }
   for (const user of [null, { id: 'member' }, { id: 'moderator', isModerator: true }]) {
     const call = request(db, user)
-    for (const path of [globalPath, userPath('member')])
+    for (const path of [globalPath, userPath('member'), usersPath])
       for (const method of ['GET', 'PATCH'])
         await assert.rejects(call(path, method), { statusCode: user ? 403 : 401 })
   }
@@ -79,10 +82,28 @@ test('image settings require an administrator, matching account and version befo
     await assert.rejects(request(db)(userPath('member'), 'PATCH', { overrideLimit, version: 'a'.repeat(64) }), { statusCode: 400 })
 })
 
+test('bulk image limits reject invalid scope, filter, version and account binding before storage access', async () => {
+  const db = { query() { assert.fail('must not query') }, connect() { assert.fail('must not connect') } }
+  const body = { selection: { type: 'all' }, filters: allFilters, overrideLimit: 4, version: 'a'.repeat(64) }
+  for (const headers of [{}, { 'x-new-api-user': 'different' }])
+    await assert.rejects(request(db, actor, headers)(usersPath, 'PATCH', body), { statusCode: 409 })
+  for (const patch of [
+    { selection: null }, { selection: { type: 'all', ids: ['user1'] } }, { selection: { type: 'filtered' } },
+    { selection: { type: 'ids', ids: [] } }, { selection: { type: 'ids', ids: ['user1', 'user1'] } },
+    { selection: { type: 'ids', ids: ['../user1'] } }, { selection: { type: 'ids', ids: [1] } },
+    { filters: undefined }, { filters: { ...allFilters, role: 'admin' } }, { filters: { ...allFilters, status: 'remote' } },
+    { filters: { ...allFilters, mode: 'inherit' } }, { filters: { ...allFilters, query: 'a'.repeat(121) } },
+    { version: undefined }, { version: 'old' }, { overrideLimit: undefined }, { overrideLimit: '4' },
+    { overrideLimit: 0 }, { overrideLimit: 1001 }, { overrideLimit: 1.5 }, { roleIds: [] },
+  ]) await assert.rejects(request(db)(usersPath, 'PATCH', { ...body, ...patch }), { statusCode: 400 })
+  for (const params of ['status=remote', 'mode=inherit', 'query=' + 'a'.repeat(121)])
+    await assert.rejects(request(db)(usersPath + '?' + params), { statusCode: 400 })
+})
+
 async function initialize(db) {
   for (const sql of [
     'CREATE TABLE meta (id text PRIMARY KEY,"clientOptions" jsonb,"rootUserId" text,"disableRegistration" boolean,name text,"iconUrl" text)',
-    'CREATE TABLE "user" (id varchar(32) PRIMARY KEY,username text,name text,host text,"isDeleted" boolean DEFAULT false)',
+    'CREATE TABLE "user" (id varchar(32) PRIMARY KEY,username text,name text,host text,"isDeleted" boolean DEFAULT false,"isSuspended" boolean DEFAULT false)',
     'CREATE TABLE moderation_log (id varchar(32) PRIMARY KEY,"userId" varchar(32),type text,info jsonb)',
     'CREATE TABLE external_account (issuer text,subject text,username text,"userId" varchar(32))',
   ]) await db.query(sql)
@@ -176,6 +197,116 @@ async function runPersistenceSuite(t, db) {
     assert.deepEqual((await row()).communityImageConcurrency, before)
     assert.equal((await request(db, null)('/api/site')).brand, '新站点')
   })
+  const list = (filters = allFilters, after) => call(usersPath + '?' + new URLSearchParams({ ...filters, ...(after ? { cursor: after } : {}) }))
+  const batch = (page, selection, overrideLimit) => call(usersPath, 'PATCH', { selection, filters: page.filters, overrideLimit, version: page.selectionVersion })
+  const addMany = async () => db.query(`INSERT INTO "user" (id,username,"isSuspended")
+    SELECT 'batch'||lpad(n::text,3,'0'),'batch-name-'||n,n%2=0 FROM generate_series(1,35) n`)
+  await scenario('bulk list searches community and unified ids, usernames and names with strict local editable scope', async () => {
+    await db.query(`UPDATE "user" SET name='特别昵称' WHERE id='user1'`)
+    await db.query(`UPDATE "user" SET "isSuspended"=true WHERE id='user2'`)
+    await db.query(`INSERT INTO external_account VALUES ('https://accounts.test','42','unified-name','user1'),('https://wrong.test','88','wrong-name','user2')`)
+    await saveUser('user1', 4)
+    const all = await list()
+    assert.equal(all.total, 4); assert.equal(all.nextCursor, null)
+    assert.deepEqual(all.items.map(item => item.id).sort(), ['admin25', 'root1', 'user1', 'user2'])
+    assert(all.items.every(item => item.canEdit && item.userId === item.id && /^[a-f0-9]{64}$/.test(item.version)))
+    const first = all.items.find(item => item.id === 'user1')
+    assert.equal(first.username, 'unified-name'); assert.equal(first.accountId, '42'); assert.equal(first.name, '特别昵称')
+    assert.equal(first.overrideLimit, 4); assert.equal(first.effectiveLimit, 4)
+    for (const query of ['user1', '42', 'first', 'unified-name', '特别昵称'])
+      assert.deepEqual((await list({ ...allFilters, query })).items.map(item => item.id), ['user1'])
+    for (const query of ['88', 'wrong-name', '%', '_', 'missing']) assert.equal((await list({ ...allFilters, query })).total, 0)
+    assert.equal((await list({ ...allFilters, status: 'active' })).total, 3)
+    assert.deepEqual((await list({ ...allFilters, status: 'suspended' })).items.map(item => item.id), ['user2'])
+    assert.deepEqual((await list({ ...allFilters, mode: 'override' })).items.map(item => item.id), ['user1'])
+    assert.equal((await list({ ...allFilters, mode: 'default' })).total, 3)
+    assert(!/userOverrides|privateToken|must-not-leak/.test(JSON.stringify(all)))
+  })
+  await scenario('cursor binds every page to the same filter and full matching snapshot', async () => {
+    await addMany()
+    const filters = { ...allFilters, query: 'batch' }, first = await list(filters), second = await list(filters, first.nextCursor)
+    assert.equal(first.total, 35); assert.equal(first.items.length, 30); assert.equal(second.items.length, 5)
+    assert.equal(second.nextCursor, null); assert.equal(first.selectionVersion, second.selectionVersion)
+    assert.equal(new Set([...first.items, ...second.items].map(item => item.id)).size, 35)
+    await assert.rejects(list({ ...filters, status: 'active' }, first.nextCursor), { statusCode: 409 })
+    for (const value of ['bad@cursor', Buffer.from(JSON.stringify({ id: 'missing', version: first.selectionVersion })).toString('base64url')])
+      await assert.rejects(list(filters, value), { statusCode: 400 })
+    await db.query(`INSERT INTO "user" (id,username) VALUES ('batch036','batch-name-36')`)
+    await assert.rejects(list(filters, first.nextCursor), { statusCode: 409 })
+    await assert.rejects(batch(first, { type: 'all' }, 8), { statusCode: 409 })
+    assert.equal((await db.query('SELECT count(*)::int AS count FROM moderation_log')).rows[0].count, 0)
+  })
+  await scenario('bulk selection edits protected administrators by local id without changing account or role data', async () => {
+    const usersBefore = (await db.query('SELECT * FROM "user" ORDER BY id')).rows
+    const accountsBefore = (await db.query('SELECT * FROM external_account ORDER BY subject')).rows
+    const saved = await batch(await list(), { type: 'ids', ids: ['root1', 'admin25', 'user1'] }, 7)
+    assert.deepEqual(saved, { selectedCount: 3, updatedCount: 3 })
+    assert.deepEqual((await row()).communityImageConcurrency.userOverrides, { root1: 7, admin25: 7, user1: 7 })
+    assert.equal((await call(userPath('user2'))).effectiveLimit, 2)
+    assert.deepEqual((await db.query('SELECT * FROM "user" ORDER BY id')).rows, usersBefore)
+    assert.deepEqual((await db.query('SELECT * FROM external_account ORDER BY subject')).rows, accountsBefore)
+    const logs = (await call('/api/admin/audit')).items
+    assert.equal(logs.length, 1); assert.equal(logs[0].type, 'updateUserImageConcurrencyBatch')
+    assert.deepEqual(logs[0].details, { selectionType: 'ids', selectedCount: 3, updatedCount: 3, after: 7 })
+    const changes = (await db.query('SELECT info FROM moderation_log')).rows[0].info.changes
+    assert.equal(changes.length, 3); assert(changes.every(change => change.before === null && change.after === 7))
+  })
+  await scenario('all filtered results include later pages and never touch unmatched users', async () => {
+    await addMany()
+    const filters = { ...allFilters, query: 'batch' }, page = await list(filters)
+    assert.deepEqual(await batch(page, { type: 'all' }, 6), { selectedCount: 35, updatedCount: 35 })
+    assert.equal(Object.keys((await row()).communityImageConcurrency.userOverrides).length, 35)
+    assert.equal((await call(userPath('user1'))).overrideLimit, null)
+    const active = await list({ ...filters, status: 'active', mode: 'override' })
+    assert.deepEqual(await batch(active, { type: 'all' }, null), { selectedCount: 18, updatedCount: 18 })
+    assert.equal(Object.keys((await row()).communityImageConcurrency.userOverrides).length, 17)
+    assert.equal((await list({ ...filters, mode: 'default' })).total, 18)
+  })
+  await scenario('bulk no-op avoids writes and audit while clearing overrides preserves defaults and other users', async () => {
+    await saveUser('user1', 7); await saveUser('user2', 9)
+    const page = await list(), before = await row(), logs = (await db.query('SELECT * FROM moderation_log ORDER BY id')).rows
+    assert.deepEqual(await batch(page, { type: 'ids', ids: ['user1'] }, 7), { selectedCount: 1, updatedCount: 0 })
+    assert.equal((await list()).selectionVersion, page.selectionVersion)
+    assert.deepEqual(await row(), before); assert.deepEqual((await db.query('SELECT * FROM moderation_log ORDER BY id')).rows, logs)
+    assert.deepEqual(await batch(page, { type: 'ids', ids: ['root1', 'user1'] }, null), { selectedCount: 2, updatedCount: 1 })
+    assert.deepEqual((await row()).communityImageConcurrency, { defaultLimit: 2, globalLimit: 10, userOverrides: { user2: 9 } })
+    await saveGlobal(4, 500)
+    assert.equal((await call(userPath('user1'))).effectiveLimit, 4)
+  })
+  await scenario('missing, remote, deleted or out-of-filter batch targets roll back the whole selection', async () => {
+    const page = await list(), before = await row()
+    for (const id of ['1', '25', 'missing', 'remote1', 'deleted1'])
+      await assert.rejects(batch(page, { type: 'ids', ids: ['user1', id] }, 8), { statusCode: 409 })
+    const narrow = await list({ ...allFilters, query: 'user1' })
+    await assert.rejects(batch(narrow, { type: 'ids', ids: ['user1', 'user2'] }, 8), { statusCode: 409 })
+    const empty = await list({ ...allFilters, query: 'missing' })
+    await assert.rejects(batch(empty, { type: 'all' }, 8), { statusCode: 400 })
+    assert.deepEqual(await row(), before)
+    assert.equal((await db.query('SELECT count(*)::int AS count FROM moderation_log')).rows[0].count, 0)
+  })
+  await scenario('stale matching status, deletion, user amount and defaults never overwrite concurrent edits', async () => {
+    for (const change of [
+      () => db.query(`UPDATE "user" SET "isSuspended"=true WHERE id='user1'`),
+      () => db.query(`UPDATE "user" SET "isDeleted"=true WHERE id='user1'`),
+      () => saveUser('user1', 9), () => saveGlobal(4, 500),
+    ]) {
+      await reset(db)
+      const page = await list()
+      await change()
+      const before = await row()
+      await assert.rejects(batch(page, { type: 'all' }, 8), { statusCode: 409 })
+      assert.deepEqual(await row(), before)
+    }
+  })
+  await scenario('failed bulk audit atomically rolls back every edited amount and retains unrelated settings', async () => {
+    const page = await list(), before = await row()
+    await db.query("ALTER TABLE moderation_log ADD CONSTRAINT reject_bulk_audit CHECK (type <> 'updateUserImageConcurrencyBatch') NOT VALID")
+    try {
+      await assert.rejects(batch(page, { type: 'all' }, 8))
+      assert.deepEqual(await row(), before)
+      assert.equal((await db.query('SELECT count(*)::int AS count FROM moderation_log')).rows[0].count, 0)
+    } finally { await db.query('ALTER TABLE moderation_log DROP CONSTRAINT reject_bulk_audit') }
+  })
 }
 
 test('image concurrency persistence, permissions and audit use real PostgreSQL SQL via PGlite', async t => {
@@ -214,5 +345,46 @@ test('image concurrency PostgreSQL transactions retain concurrent administrator 
     assert.equal(outcomes.find(outcome => outcome.status === 'rejected').reason.statusCode, 409)
     const logs = await db.query('SELECT count(*)::int AS count FROM moderation_log')
     assert.equal(logs.rows[0].count, 3)
+  })
+  await t.test('concurrent batches and single-user edits serialize and reject an obsolete whole-filter snapshot', async () => {
+    await reset(db)
+    const call = request(db), page = await call(usersPath)
+    const outcomes = await Promise.allSettled([5, 6].map(overrideLimit => call(usersPath, 'PATCH', {
+      selection: { type: 'all' }, filters: page.filters, overrideLimit, version: page.selectionVersion,
+    })))
+    assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
+    assert.equal(outcomes.find(outcome => outcome.status === 'rejected').reason.statusCode, 409)
+    const values = (await db.query('SELECT "clientOptions" FROM meta')).rows[0].clientOptions.communityImageConcurrency.userOverrides
+    assert.equal(Object.keys(values).length, 4); assert.equal(new Set(Object.values(values)).size, 1)
+    assert.equal((await db.query('SELECT count(*)::int AS count FROM moderation_log')).rows[0].count, 1)
+    const stale = await call(usersPath), target = await call(userPath('user1'))
+    await call(userPath('user1'), 'PATCH', { overrideLimit: 10, version: target.version })
+    await assert.rejects(call(usersPath, 'PATCH', { selection: { type: 'all' }, filters: stale.filters, overrideLimit: 8, version: stale.selectionVersion }), { statusCode: 409 })
+    assert.equal((await call(userPath('user1'))).effectiveLimit, 10)
+  })
+  await t.test('batch holds target account locks until commit so concurrent suspension cannot enter midway', async () => {
+    await reset(db)
+    let reached, release
+    const ready = new Promise(resolve => { reached = resolve }), gate = new Promise(resolve => { release = resolve })
+    const wrapped = { query: db.query.bind(db), async connect() {
+      const client = await db.connect()
+      return { release: () => client.release(), async query(sql, parameters) {
+        if (sql.startsWith('INSERT INTO moderation_log')) { reached(); await gate }
+        return client.query(sql, parameters)
+      } }
+    } }
+    const call = request(wrapped), page = await call(usersPath), other = await db.connect()
+    try {
+      const saving = call(usersPath, 'PATCH', { selection: { type: 'ids', ids: ['user1', 'user2'] }, filters: page.filters, overrideLimit: 8, version: page.selectionVersion })
+      await ready
+      await other.query('BEGIN')
+      await other.query("SET LOCAL lock_timeout='100ms'")
+      await assert.rejects(other.query(`UPDATE "user" SET "isSuspended"=true WHERE id='user1'`), { code: '55P03' })
+      await other.query('ROLLBACK')
+      release()
+      assert.deepEqual(await saving, { selectedCount: 2, updatedCount: 2 })
+      await other.query(`UPDATE "user" SET "isSuspended"=true WHERE id='user1'`)
+      assert.equal((await db.query(`SELECT "isSuspended" FROM "user" WHERE id='user1'`)).rows[0].isSuspended, true)
+    } finally { release(); await other.query('ROLLBACK'); other.release() }
   })
 })

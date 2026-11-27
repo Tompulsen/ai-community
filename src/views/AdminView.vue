@@ -8,6 +8,7 @@ import AdminWelfareTasks from '../components/AdminWelfareTasks.vue'
 import AdminLotteryChances from '../components/AdminLotteryChances.vue'
 import AdminCommunity from '../components/AdminCommunity.vue'
 import AdminModels from '../components/AdminModels.vue'
+import AdminImageConcurrencyPanel from '../components/AdminImageConcurrencyPanel.vue'
 import CommunitySkills from '../components/CommunitySkills.vue'
 import AdminPeople from '../components/AdminPeople.vue'
 import AdminUsers from '../components/AdminUsers.vue'
@@ -19,7 +20,7 @@ import { kindLabels, statusLabels, type AdminOverviewData, type Work, type WorkS
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
 
 const route = useRoute(), router = useRouter()
-type Tab = 'overview' | 'review' | 'lottery' | 'lottery-chances' | 'welfare' | 'site' | 'settings' | 'models' | 'skills' | 'tags' | 'ads' | 'users' | 'reports' | 'logs' | 'announcements' | 'audit' | 'roles'
+type Tab = 'overview' | 'review' | 'lottery' | 'lottery-chances' | 'welfare' | 'site' | 'settings' | 'models' | 'image-concurrency' | 'skills' | 'tags' | 'ads' | 'users' | 'reports' | 'logs' | 'announcements' | 'audit' | 'roles'
 const overview = ref<AdminOverviewData | null>(null), days = ref<7 | 30>(7)
 const status = ref<WorkStatus | 'all'>('pending'), query = ref(''), search = ref('')
 const works = ref<Work[]>([]), nextCursor = ref<string | null>(null), updatedAt = ref('')
@@ -41,6 +42,7 @@ const adminTabs = computed(() => [
     { id: 'site' as const, label: '站点设置', icon: Globe, group: '运营设置' },
     { id: 'settings' as const, label: '社区设置', icon: Settings2, group: '运营设置' },
     { id: 'models' as const, label: '模型管理', icon: Bot, group: '运营设置' },
+    { id: 'image-concurrency' as const, label: '图片并发', icon: Settings2, group: '运营设置' },
     { id: 'ads' as const, label: '广告位', icon: Megaphone, group: '运营设置' },
     { id: 'announcements' as const, label: '公告管理', icon: Megaphone, group: '运营设置' },
     { id: 'lottery' as const, label: '活动抽奖', icon: Gift, group: '运营设置' },
@@ -181,6 +183,7 @@ async function review() {
         <AdminWelfareTasks v-else-if="tab === 'welfare' && session.user?.isAdmin" :key="session.user.id" ref="editor" />
         <AdminCommunity v-else-if="(tab === 'site' || tab === 'settings' || tab === 'tags' || tab === 'ads') && session.user?.isAdmin" :key="`${session.user.id}:${tab}`" ref="editor" :view="tab" />
         <AdminModels v-else-if="tab === 'models' && session.user?.isAdmin" :key="session.user.id" ref="editor" :confirm-leave="confirmLeave" />
+        <AdminImageConcurrencyPanel v-else-if="tab === 'image-concurrency' && session.user?.isAdmin" :key="session.user.id" ref="editor" :confirm-leave="confirmLeave" />
         <CommunitySkills v-else-if="tab === 'skills' && session.user?.isAdmin" :key="session.user.id" ref="editor" admin :confirm-leave="confirmLeave" />
         <AdminUsers v-else-if="tab === 'users' && session.user?.isAdmin" :key="session.user.id" ref="editor" :confirm-leave="confirmLeave" />
         <AdminPeople v-else-if="tab === 'reports'" :key="`reports:${session.user?.id}`" ref="editor" :confirm-leave="confirmLeave" />
