@@ -47,7 +47,7 @@ import { resolveVideoModelSetting } from './video-models.ts'
 import { videoDurationSeconds } from './video-privacy.ts'
 import { sniffType } from './media.ts'
 import type { VideoModelSetting } from '../shared/studio/model-types.ts'
-import { requestStoreEnabled, nativeRequestsEnabled, readDurableRequest, registerDurableRequest,
+import { requestStoreEnabled, nativeRequestsEnabled, readDurableRequest, registerDurableRequest, registerImageRequest,
   dispatchDurableRequest, savePreparingRequest, saveDurableRequest, dueDurableRequests, claimDurablePoll,
   expiredRequestCandidates, deleteDurableRequest, type DurableRequest } from './creation/request-store.ts'
 import type { Queryable } from './types.ts'
@@ -61,12 +61,14 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const uncertain: CreationTask = { status: 'indeterminate', outputs: [], error: '获取生成结果失败。' }
 const workSkillError = '生成服务未能完成本次技能调用，请核对任务与使用记录。'
 const preparationErrors = new Set(['NEW_API_GROUP_TOKEN_UNAVAILABLE', 'NEW_API_TOKEN_REQUIRED', 'COMMUNITY_WALLET_CONFIG'])
+const imageAdmissionErrors = new Set(['IMAGE_CONCURRENCY_LIMIT', 'IMAGE_GLOBAL_LIMIT', 'IMAGE_CONCURRENCY_UNAVAILABLE'])
 type Credentials = Awaited<ReturnType<typeof resolveRelayCredentials>>
 type Result = CreationTask & { tokenId: number; protocol: CreationTaskProtocol; apiFormat?: Exclude<ModelApiFormat, 'auto'>; requestId?: string; deadline?: number }
 interface TrackedRequest {
   fingerprint: string
   hasWorkSkills?: boolean
   kind: CreationKind
+  imageCount?: number
   result: Result
   deadline?: number
   tracking?: string
@@ -782,6 +784,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
       throw httpError(400, '新版请求不能同时指定旧版密钥或分组字段。')
   }
   let group = input.group
+  let options: Record<string, unknown> | undefined
   if (group === undefined && req.headers.has('x-new-api-group')) {
     try { group = decodeURIComponent(req.headers.get('x-new-api-group')!) }
     catch { throw httpError(400, '请求分组无效。') }
@@ -793,14 +796,24 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
       result: { status: 'pending', outputs: [], requestId: input.requestId, tokenId: 0, protocol: 'sync',
         ...(input.kind === 'image' ? { stage: 'preparing', stageStartedAt: Date.now() } : {}) },
       deadline: Date.now() + 180000, filesRoot: ctx.filesRoot, background: true }
-    const registration = await registerDurableRequest(ctx.db, key, fingerprint, preparing, input.contractVersion ?? 1)
+    errorStage = '任务接纳'
+    const registration = input.kind === 'image'
+      ? await registerImageRequest(ctx.db, key, fingerprint, preparing, ctx.user!.id, accountNamespace(ctx), input.n ?? 1, input.contractVersion ?? 1)
+      : await registerDurableRequest(ctx.db, key, fingerprint, preparing, input.contractVersion ?? 1)
+    if ('options' in registration && record(registration.options)) options = registration.options
     if (!registration.inserted) {
       if (!matchesRequest(ctx, registration.row.fingerprint)) throw httpError(409, '请求编号已被使用，请先核对原任务。')
       return await cachedResult(ctx, registration.row.record, key)
     }
     durable = { db: ctx.db, row: registration.row }
   }
-  if (input.kind === 'image') { errorStage = '等待提交'; ticket = imageSubmissions.reserve(accountNamespace(ctx)) }
+  if (input.kind === 'image' && !durable) {
+    errorStage = '模型配置读取'
+    options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
+    if (options?.communityImageConcurrency !== undefined)
+      throw Object.assign(httpError(503, '图片并发设置需要启用持久化任务服务，请联系管理员。'), { code: 'IMAGE_CONCURRENCY_UNAVAILABLE', notAccepted: true })
+    errorStage = '等待提交'; ticket = imageSubmissions.reserve(accountNamespace(ctx))
+  }
   errorStage = '技能准备'
   const workSkills = input.skills?.filter(skill => skill.id.startsWith('work-')) || []
   const instructions = await workSkillInstructions(ctx, workSkills, input.kind)
@@ -810,7 +823,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     input.chatOptions = { ...options, messages: [...instructions.map(content => ({ role: 'system' as const, content })), ...options.messages] }
   } else input.prompt = await mediaSkillPrompt(ctx.db, input.kind, input.prompt, input.skills, new Map(workSkills.map((skill, index) => [skill.id, instructions[index]!])))
   errorStage = '模型配置读取'
-  const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
+  if (input.kind !== 'image') options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
   const setting = readModelTypes(options?.communityModelTypes).find(item => item.id === input.model)
   input = resolveCreationModelSettings(input, setting)
   if (input.kind === 'video' && input.videoOptions?.openaiReferenceSource === 'image_url') {
@@ -886,7 +899,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   const textStream = input.kind === 'text' && input.chatOptions?.stream
   const deadline = Date.now() + (input.kind === 'image' ? 615000 : input.kind === 'video' ? 375000 : textStream ? textGenerationTimeouts.total + textGenerationTimeouts.save : 195000)
   const pending: TrackedRequest = { fingerprint, requestExpiresAt: durable?.row.record.requestExpiresAt as number | undefined ?? Date.now() + creationRetention.request,
-    contractVersion: input.contractVersion ?? 1, kind: input.kind, ...(hasWorkSkills ? { hasWorkSkills: true } : {}), result: { status: 'pending', outputs: [], requestId: input.requestId,
+    contractVersion: input.contractVersion ?? 1, kind: input.kind, ...(input.kind === 'image' ? { imageCount: input.n ?? 1 } : {}), ...(hasWorkSkills ? { hasWorkSkills: true } : {}), result: { status: 'pending', outputs: [], requestId: input.requestId,
     ...(input.kind === 'text' ? { deadline } : {}),
     ...(input.kind === 'image' ? { stage: 'generating', stageStartedAt: Date.now() } : {}),
     tokenId: credentials.tokenId, protocol, ...(apiFormat ? { apiFormat } : {}) },
@@ -1024,7 +1037,8 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   } catch (error) {
     if (durable && !dispatched) {
       const cached = durable.row.record as unknown as TrackedRequest
-      cached.result = { ...cached.result, status: 'failed', errorStage, error: stageError(errorStage, message(error)) }
+      cached.result = { ...cached.result, status: 'failed', errorStage, error: stageError(errorStage, message(error)),
+        ...(record(error) && imageAdmissionErrors.has(String(error.code)) ? { errorCode: String(error.code), errorStatus: Number(error.statusCode) } : {}) }
       await saveDurableRequest(durable.db, durable.row, cached, null, true).catch(() => {})
       recoverable = false
     }
@@ -1231,9 +1245,9 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
     } else if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/creation/generate') {
       const duplicate = await duplicateRequest(ctx)
       if (duplicate) { ctx.json(200, duplicate); return true }
-      await rateLimit(ctx, 'generate', 12)
-      if (creationsClosing(ctx.redis)) throw Object.assign(httpError(503, '服务正在更新，请稍后提交。'), { notAccepted: true, errorStage: '请求校验' })
       const input = validateCreationInput(ctx.body)
+      if (input.kind !== 'image' || !requestStoreEnabled()) await rateLimit(ctx, 'generate', 12)
+      if (creationsClosing(ctx.redis)) throw Object.assign(httpError(503, '服务正在更新，请稍后提交。'), { notAccepted: true, errorStage: '请求校验' })
       const background = input.kind === 'video' && String(ctx.req.headers.prefer || '').split(',').some(value => value.trim() === 'respond-async')
       if (!background && (input.imageOptions?.imageStream || input.kind === 'text' && input.chatOptions?.stream)) {
         // A disconnected browser stops receiving events; the paid job still finishes and is recoverable.
@@ -1250,7 +1264,7 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
           const detail = statusCode < 500 || error instanceof NewApiError || error instanceof PublicImageError ? message(error) : '服务暂时不可用。'
           logCreationFailure(record(ctx.body) ? ctx.body.requestId : undefined, stage, statusCode || 500, record(error) ? error.code : undefined, notAccepted)
           emit({ type: 'error', error: stageError(stage, detail, statusCode || 500) + (notAccepted ? ' 未向生成网关提交请求。' : ''), errorStage: stage, errorStatus: statusCode || 500, notAccepted,
-            ...(error instanceof NewApiError ? { code: error.code } : {}),
+            ...(error instanceof NewApiError || record(error) && imageAdmissionErrors.has(String(error.code)) ? { code: String(error.code) } : {}),
             ...(notAccepted ? { statusCode, notAccepted: true } : {}) })
         }
         finally { writer.end() }

@@ -20,7 +20,7 @@ import { NewApiError } from './native-account/config.ts'
 import { videoModelSettingSchema } from '../shared/studio/model-types.ts'
 import { handleContent } from './content.ts'
 import { drainCreations, stopAcceptingCreations } from './creation/inflight.ts'
-import { requestDatabase, environment } from './creation/test-database.mjs'
+import { requestDatabase, environment, transactionalFixture } from './creation/test-database.mjs'
 import { saveSession, removeSessionById } from './native-account/session.ts'
 
 test('preference migration returns only token ownership/group mappings and never reveals secrets', async t => {
@@ -206,6 +206,7 @@ test('durable generation survives Redis loss and never replays dispatched reques
     assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
   })
   await t.test('a synchronous v1 paid result repairs an uncertain terminal record from its late recovery file', async t => {
+    const db = await requestDatabase(t)
     const filesRoot = await mkdtemp(path.join(tmpdir(), 'durable-sync-recovery-'))
     t.after(() => rm(filesRoot, { recursive: true, force: true }))
     let unavailable = false
@@ -297,6 +298,7 @@ function fixture(t, options = {}) {
   const catalogueCalls = []
   const groupCalls = []
   const mediaCalls = []
+  const transactionDb = transactionalFixture({ query: (sql, params) => options.storeDb.query(sql, params) })
   const app = Fastify({ forceCloseConnections: true })
   t.after(() => app.close())
   const redis = {
@@ -368,7 +370,10 @@ function fixture(t, options = {}) {
     const user = { id: `local-${accountId}`, accountId, username: 'root', isAdmin: options.isAdmin === true }
     const ctx = {
       req: request.raw, res: reply.raw, request, reply, redis, user,
-      db: { async query(sql, params) {
+      db: { async connect() {
+        const client = await transactionDb.connect()
+        return { query: (sql, params) => sql.includes('FROM meta') ? this.query(sql, params) : client.query(sql, params), release: client.release }
+      }, async query(sql, params) {
         if (options.storeDb && sql.includes('community_creation_request')) return options.storeDb.query(sql, params)
         if (options.mediaFiles && sql.includes('FROM drive_file')) {
           if (sql.includes('WITH visible_file')) {
@@ -380,7 +385,7 @@ function fixture(t, options = {}) {
         }
         if (options.workQuery && (sql.includes('FROM community_submission s') || sql.includes('FROM drive_file'))) return { rows: await options.workQuery(sql, params) }
         if (options.skillRows && sql.includes('FROM community_skill')) return { rows: await options.skillRows(sql, params) }
-        assert.equal(sql, 'SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')
+        assert.equal(sql.replace(/ FOR UPDATE$/, ''), 'SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')
         if (options.modelReadError) throw options.modelReadError
         await options.beforeModelRead?.()
         return { rows: [{ clientOptions: { communityModelTypes: options.modelTypes ?? [] } }] }
@@ -409,8 +414,8 @@ function submit(app, body = imageRequest, extraHeaders = {}) {
 test('current image flow exposes preparation and canonical retries bypass new submission limits', async t => {
   const db = await requestDatabase(t), ready = deferred(), release = deferred()
   environment(t, { COMMUNITY_REQUEST_STORE: '1', COMMUNITY_REQUEST_V2: '1', NEW_API_SESSION_SECRET: 'current-image-stage-secret-'.repeat(3) })
-  const f = fixture(t, { storeDb: db, groupToken: () => 71,
-    async beforeModelRead() { ready.resolve(); await release.promise },
+  const f = fixture(t, { storeDb: db,
+    async groupToken() { ready.resolve(); await release.promise; return 71 },
     fetch: () => Response.json({ data: [{ url: 'https://media.example/canonical.png' }] }) })
   const input = { kind: 'image', model: 'gpt-image-2', prompt: 'Test', requestId: 'canonical-stage', contractVersion: 2, group: 'images' }
   const pending = submit(f.app, input).then(value => value)
@@ -584,18 +589,18 @@ test('cleanup cannot delete a request reclaimed by a running worker', async t =>
   assert.equal((await f.row()).record.filesCleanedAt, undefined)
 })
 
-test('queued image submission rechecks a fresh request identity without blocking task GETs', async t => {
+test('durable images enter directly beyond the old two-slot queue without blocking task GETs', async t => {
   const db = await requestDatabase(t), started = deferred(), release = deferred(), queued = deferred()
   environment(t, { COMMUNITY_REQUEST_STORE: '1', COMMUNITY_REQUEST_V2: '1', NEW_API_SESSION_SECRET: 'current-image-queue-secret-'.repeat(3) })
   const checked = []
   const f = fixture(t, { storeDb: db, groupToken: () => 71,
     credentials(req) {
       checked.push(req)
-      if (req.headers.get('x-new-api-user') === '18') queued.resolve()
       return { baseUrl: 'https://model.example', apiKey, tokenId: 71, userId: Number(req.headers.get('x-new-api-user')) }
     },
     async fetch() {
       if (f.calls.length === 2) started.resolve()
+      if (f.calls.length === 3) queued.resolve()
       await release.promise
       return Response.json({ error: { message: 'fixture rejection' } }, { status: 400 })
     } })
@@ -607,13 +612,11 @@ test('queued image submission rechecks a fresh request identity without blocking
     requests.push(submit(f.app, { ...base, requestId: 'waiting' }, { 'x-test-account': '18' }).then(value => value))
     await queued.promise
     const current = await f.app.inject({ url: '/api/creation/requests/waiting', headers: { 'x-test-account': '18' } })
-    assert.equal(current.json().stage, 'queued', current.payload)
-    assert.equal(f.calls.length, 2)
+    assert.equal(current.json().stage, 'generating', current.payload)
+    assert.equal(f.calls.length, 3)
   } finally { release.resolve(); await Promise.all(requests) }
   const identityChecks = checked.filter(req => req.headers.get('x-new-api-user') === '18')
-  assert.equal(identityChecks.length, 2)
-  assert.notEqual(identityChecks[0], identityChecks[1])
-  assert.equal(identityChecks[1].headers.get('x-new-api-token'), '71')
+  assert.equal(identityChecks.length, 1)
   assert.equal(f.calls.length, 3)
 })
 

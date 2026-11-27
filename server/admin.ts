@@ -9,7 +9,9 @@ import { httpError, roleCondition } from './auth.ts'
 import { accountCenter } from './account-session.ts'
 import { communityAdKeys, normalizeCommunityAd, type CommunityAd } from './business/ads.ts'
 import { legacyIdTime } from './content.ts'
-import { readModerationSettings, readSiteSettings, validateModerationSettings, validateSiteBranding, validateSiteSettings, type ModerationSettings } from './settings.ts'
+import { readImageConcurrencySettings, readModerationSettings, readSiteSettings, validateImageConcurrencySettings, validateModerationSettings, validateSiteBranding, validateSiteSettings, type ModerationSettings } from './settings.ts'
+import { IMAGE_CONCURRENCY_GLOBAL_MAX, IMAGE_CONCURRENCY_USER_MAX, type ImageConcurrencySettings } from '../shared/studio/image-concurrency.ts'
+import { requestStoreEnabled } from './creation/request-store.ts'
 import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
 import { modelTypesSchema, readModelTypes } from '../shared/studio/model-types.ts'
 import { feedWeightsSchema, readFeedWeights } from '../shared/recommendation.ts'
@@ -87,6 +89,55 @@ async function meta(db: Queryable, lock = false): Promise<MetaRow> {
 }
 async function audit(ctx: RequestContext, db: Queryable, type: string, info: Body) {
   await db.query('INSERT INTO moderation_log (id,"userId",type,info) VALUES ($1,$2,$3,$4::jsonb)', [ctx.newId(), ctx.requireUser().id, type, JSON.stringify(info)])
+}
+function imageConcurrencyVersion(settings: ImageConcurrencySettings, userId?: string) {
+  return fingerprint({ defaultLimit: settings.defaultLimit, globalLimit: settings.globalLimit,
+    ...(userId ? { userId, overrideLimit: Object.hasOwn(settings.userOverrides, userId) ? settings.userOverrides[userId] : null }
+      : {}) })
+}
+function imageConcurrencyResponse(settings: ImageConcurrencySettings, user?: { id: string; host: string | null }) {
+  const config = { defaultLimit: settings.defaultLimit, globalLimit: settings.globalLimit, version: imageConcurrencyVersion(settings, user?.id) }
+  if (!user) return config
+  const overrideLimit = Object.hasOwn(settings.userOverrides, user.id) ? settings.userOverrides[user.id]! : null
+  return { ...config, userId: user.id, overrideLimit, effectiveLimit: overrideLimit ?? settings.defaultLimit, canEdit: user.host === null }
+}
+async function imageConcurrency(ctx: RequestContext, userId?: string) {
+  const id = userId === undefined ? undefined : identifier(userId)
+  const target = async (db: Queryable, lock = false) => {
+    if (!id) return undefined
+    const row = (await db.query<{ id: string; host: string | null }>(`SELECT id,host FROM "user" WHERE id=$1 AND NOT "isDeleted"${lock ? ' FOR SHARE' : ''}`, [id])).rows[0]
+    if (!row) fail('账号不存在。', 404)
+    return row
+  }
+  if (ctx.req.method === 'GET') {
+    const user = await target(ctx.db)
+    return imageConcurrencyResponse(readImageConcurrencySettings((await meta(ctx.db)).clientOptions?.communityImageConcurrency), user)
+  }
+  if (ctx.req.headers?.['x-new-api-user'] !== ctx.requireAdmin().id) fail('登录账号已变化，请刷新后重新核对。', 409)
+  keys(ctx.body, id ? ['overrideLimit', 'version'] : ['defaultLimit', 'globalLimit', 'version'])
+  if (typeof ctx.body.version !== 'string' || !/^[a-f0-9]{64}$/.test(ctx.body.version)) fail('缺少有效版本，请刷新后重试。')
+  const overrideLimit = id ? ctx.body.overrideLimit === null ? null : integer(ctx.body.overrideLimit, 1, IMAGE_CONCURRENCY_USER_MAX) : null
+  const defaults = id ? undefined : { defaultLimit: integer(ctx.body.defaultLimit, 1, IMAGE_CONCURRENCY_USER_MAX), globalLimit: integer(ctx.body.globalLimit, 1, IMAGE_CONCURRENCY_GLOBAL_MAX) }
+  if (!requestStoreEnabled()) fail('图片并发设置需要启用持久化请求服务，请联系维护人员。', 503)
+  return transaction(ctx.db, async db => {
+    const row = await meta(db, true), user = await target(db, true)
+    if (user && user.host !== null) fail('只能设置本地账号的图片并发上限。', 404)
+    const previous = readImageConcurrencySettings(row.clientOptions?.communityImageConcurrency)
+    if (ctx.body.version !== imageConcurrencyVersion(previous, id)) fail('图片并发设置已变化，请刷新后重新核对。', 409)
+    const userOverrides = { ...previous.userOverrides }
+    if (id) {
+      if (overrideLimit === null) delete userOverrides[id]
+      else userOverrides[id] = overrideLimit!
+    }
+    const next = validateImageConcurrencySettings({ ...previous, ...defaults, userOverrides })
+    if (fingerprint(previous) !== fingerprint(next)) {
+      await db.query(`UPDATE meta SET "clientOptions"=COALESCE("clientOptions",'{}'::jsonb)||$2::jsonb WHERE id=$1`, [row.id, JSON.stringify({ communityImageConcurrency: next })])
+      await audit(ctx, db, id ? 'updateUserImageConcurrency' : 'updateImageConcurrency', id
+        ? { userId: id, before: Object.hasOwn(previous.userOverrides, id) ? previous.userOverrides[id] : null, after: overrideLimit }
+        : { before: { defaultLimit: previous.defaultLimit, globalLimit: previous.globalLimit }, after: defaults })
+    }
+    return imageConcurrencyResponse(next, user)
+  })
 }
 function publicConfig(options: Body) {
   const currentLimits = record(options.uploadLimits) ? options.uploadLimits : {}
@@ -533,6 +584,7 @@ function packAnnouncement(row: AnnouncementRow) {
 }
 
 const auditLabels: Record<string, string> = {
+  updateImageConcurrency: '调整图片并发默认设置', updateUserImageConcurrency: '调整用户图片并发上限',
   updateUserModerationNote: '更新管理笔记', clearUserProfileMedia: '清除资料图片',
   createAnnouncement: '发布公告', updateAnnouncement: '修改公告', deleteAnnouncement: '停用公告',
   communityWorkEdit: '编辑作品', communityWorkDelete: '删除作品', communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解除封禁', resolveAbuseReport: '处理举报',
@@ -549,7 +601,15 @@ function safeAuditDetails(type: string, input: unknown): Body {
   const copyList = (key: string, allowed?: readonly string[]) => {
     if (Array.isArray(input[key])) result[key] = input[key].filter((value): value is string => typeof value === 'string' && (allowed ? allowed.includes(value) : /^[a-zA-Z0-9]{1,32}$/.test(value))).slice(0, 100)
   }
-  if (['createAnnouncement', 'updateAnnouncement', 'deleteAnnouncement'].includes(type)) {
+  if (type === 'updateUserImageConcurrency') {
+    copyId('userId')
+    for (const key of ['before', 'after']) { if (input[key] === null) result[key] = null; else copyNumber(key) }
+  } else if (type === 'updateImageConcurrency') {
+    for (const key of ['before', 'after']) if (record(input[key])) {
+      const value = input[key] as Body
+      result[key] = Object.fromEntries(['defaultLimit', 'globalLimit'].flatMap(field => typeof value[field] === 'number' && Number.isSafeInteger(value[field]) ? [[field, value[field]]] : []))
+    }
+  } else if (['createAnnouncement', 'updateAnnouncement', 'deleteAnnouncement'].includes(type)) {
     copyId('announcementId'); copyList('fields', ['title', 'text', 'isActive', 'popupEnabled'])
   } else if (type === 'communityWorkEdit' || type === 'communityWorkDelete') {
     copyId('submissionId'); copyId('userId'); copyNumber('version')
@@ -691,13 +751,15 @@ export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
   const tag = /^\/api\/admin\/tags\/([a-zA-Z0-9]{1,32})$/.exec(path), person = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})$/.exec(path)
   const report = /^\/api\/admin\/reports\/([a-zA-Z0-9]{1,32})$/.exec(path), announcement = /^\/api\/admin\/announcements\/([a-zA-Z0-9]{1,32})$/.exec(path)
   const userRoles = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/roles$/.exec(path)
+  const userImageConcurrency = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/image-concurrency$/.exec(path)
   const userSection = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/(note|media|logins)$/.exec(path)
-  const recognized = ['/api/admin/models', '/api/admin/welfare/tasks', '/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles'].includes(path) || tag || person || report || announcement || userRoles || userSection
+  const recognized = ['/api/admin/models', '/api/admin/welfare/tasks', '/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles', '/api/admin/creation/image-concurrency'].includes(path) || tag || person || report || announcement || userRoles || userSection || userImageConcurrency
   if (!recognized) return false
   if (path === '/api/admin/reports' || report) { const actor = ctx.requireUser(); if (!actor.isAdmin && !actor.isModerator) fail('需要审核员权限。', 403) }
   else ctx.requireAdmin()
   let result: unknown
-  if (path === '/api/admin/models' && ['GET', 'PATCH'].includes(method ?? '')) result = await modelSettings(ctx)
+  if ((path === '/api/admin/creation/image-concurrency' || userImageConcurrency) && ['GET', 'PATCH'].includes(method ?? '')) result = await imageConcurrency(ctx, userImageConcurrency?.[1])
+  else if (path === '/api/admin/models' && ['GET', 'PATCH'].includes(method ?? '')) result = await modelSettings(ctx)
   else if (path === '/api/admin/welfare/tasks' && ['GET', 'PATCH'].includes(method ?? '')) result = await welfareTasks(ctx)
   else if (path === '/api/admin/community/config' && ['GET', 'PATCH'].includes(method ?? '')) result = await config(ctx)
   else if (path === '/api/admin/community/ads' && ['GET', 'PATCH'].includes(method ?? '')) result = await ads(ctx)

@@ -49,7 +49,7 @@ jobs:
         run: npm ci
 
       - name: Run PostgreSQL integration tests
-        run: node --test server/following.test.mjs server/lottery-daily.test.mjs server/lottery-public.test.mjs server/lottery-summary.test.mjs server/publication-reward.test.mjs server/account-session.test.mjs server/discovery.test.mjs server/admin-users.test.mjs server/content-performance.test.mjs server/lottery-status.test.mjs server/media-visibility.test.mjs server/community-skills.test.mjs server/welfare-points.test.mjs
+        run: node --test server/following.test.mjs server/lottery-daily.test.mjs server/lottery-public.test.mjs server/lottery-summary.test.mjs server/publication-reward.test.mjs server/account-session.test.mjs server/discovery.test.mjs server/admin-users.test.mjs server/admin-image-concurrency.test.mjs server/creation/image-admission.test.mjs server/content-performance.test.mjs server/lottery-status.test.mjs server/media-visibility.test.mjs server/community-skills.test.mjs server/welfare-points.test.mjs
 
       - name: Verify media budgets against Redis
         run: node --test server/creation/media-budget.test.mjs

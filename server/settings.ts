@@ -5,6 +5,24 @@
 import { normalizeCommunityAd, communityAdKeys, type CommunityAd } from './business/ads.ts'
 import { httpError } from './auth.ts'
 import type { Queryable } from './types.ts'
+import { IMAGE_CONCURRENCY_GLOBAL_MAX, IMAGE_CONCURRENCY_USER_MAX, type ImageConcurrencySettings } from '../shared/studio/image-concurrency.ts'
+
+export function validateImageConcurrencySettings(input: unknown): ImageConcurrencySettings {
+  const value = input as ImageConcurrencySettings | null
+  const validLimit = (limit: unknown, maximum: number): limit is number => typeof limit === 'number' && Number.isInteger(limit) && limit >= 1 && limit <= maximum
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['defaultLimit', 'globalLimit', 'userOverrides'].includes(key)) ||
+    !validLimit(value.defaultLimit, IMAGE_CONCURRENCY_USER_MAX) || !validLimit(value.globalLimit, IMAGE_CONCURRENCY_GLOBAL_MAX) ||
+    !value.userOverrides || typeof value.userOverrides !== 'object' || Array.isArray(value.userOverrides))
+    throw httpError(400, '图片并发设置无效：用户图片数须为 1–1000 的整数，全站请求数须为 1–10000 的整数。')
+  const entries = Object.entries(value.userOverrides)
+  if (entries.some(([id, limit]) => !/^[a-zA-Z0-9]{1,32}$/.test(id) || !validLimit(limit, IMAGE_CONCURRENCY_USER_MAX)))
+    throw httpError(400, '用户图片并发设置无效，请刷新后重试。')
+  return { defaultLimit: value.defaultLimit, globalLimit: value.globalLimit, userOverrides: Object.fromEntries(entries) }
+}
+
+export function readImageConcurrencySettings(input: unknown): ImageConcurrencySettings {
+  return validateImageConcurrencySettings(input === undefined ? { defaultLimit: 2, globalLimit: 10, userOverrides: {} } : input)
+}
 
 export interface ModerationSettings { enabled: boolean; sensitiveWords: string[]; reviewThreshold: number; rejectThreshold: number }
 

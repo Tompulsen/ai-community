@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import type { Queryable } from '../types.ts'
+import type { Database, Queryable } from '../types.ts'
 import { creationRetention } from '../../shared/studio/creation-limits.ts'
+import { readImageConcurrencySettings } from '../settings.ts'
 
 export const requestStoreEnabled = () => process.env.COMMUNITY_REQUEST_STORE === '1'
 const v2Configured = () => process.env.COMMUNITY_REQUEST_V2 === '1' || !!process.env.COMMUNITY_REQUEST_V2_ACCOUNTS?.trim()
@@ -47,6 +48,38 @@ export async function registerDurableRequest(db: Queryable, key: string, fingerp
     VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (key) DO NOTHING RETURNING *`,
   [key, fingerprint, contractVersion, legacy ? requestState(record) : 'preparing', owner, JSON.stringify(record), nextPoll(record)])
   return { inserted: result.rows.length === 1, row: retainRow(result.rows[0]) ?? (await readDurableRequest(db, key))! }
+}
+export async function registerImageRequest(db: Database, key: string, fingerprint: string,
+  record: object, userId: string, namespace: string, imageCount: number, contractVersion = 1) {
+  const prefix = `community-next:creation:request:${namespace}:`
+  if (!/^[a-f0-9]{64}$/.test(namespace) || !key.startsWith(prefix) || !Number.isSafeInteger(imageCount) || imageCount < 1 || imageCount > 10)
+    throw new Error('Invalid image admission request')
+  const client = await db.connect()
+  try {
+    await client.query('BEGIN')
+    const options = (await client.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1 FOR UPDATE')).rows[0]?.clientOptions
+    if (!options) throw Object.assign(new Error('图片并发设置暂不可用，请稍后重试。'), { statusCode: 503, code: 'IMAGE_CONCURRENCY_UNAVAILABLE', notAccepted: true })
+    const existing = await readDurableRequest(client, key)
+    if (existing) { await client.query('COMMIT'); return { inserted: false, row: existing, options } }
+    const settings = readImageConcurrencySettings(options.communityImageConcurrency)
+    const counts = (await client.query<{ requests: string; images: string }>(`SELECT count(*) AS requests,
+      COALESCE(sum(CASE WHEN left(key,length($1))=$1 THEN GREATEST(1,
+        COALESCE((record->>'imageCount')::int,(context#>>'{resolved,n}')::int,1)) ELSE 0 END),0) AS images
+      FROM community_creation_request WHERE record->>'kind'='image'
+      AND record#>>'{result,status}' IN ('pending','indeterminate')
+      AND (record->>'deadline')::bigint>$2`, [prefix, Date.now()])).rows[0]!
+    const limit = Object.hasOwn(settings.userOverrides, userId) ? settings.userOverrides[userId]! : settings.defaultLimit
+    if (Number(counts.images) + imageCount > limit)
+      throw Object.assign(new Error(`当前账号最多同时生成 ${limit} 张图片，已有 ${counts.images} 张进行中，请等待已有任务完成后重试。`),
+        { statusCode: 429, code: 'IMAGE_CONCURRENCY_LIMIT', retryAfter: 5, notAccepted: true })
+    if (Number(counts.requests) >= settings.globalLimit)
+      throw Object.assign(new Error(`全站同时进行的图片请求已达到 ${settings.globalLimit} 个，请稍后重试。`),
+        { statusCode: 429, code: 'IMAGE_GLOBAL_LIMIT', retryAfter: 5, notAccepted: true })
+    const registration = await registerDurableRequest(client, key, fingerprint, { ...record, imageCount }, contractVersion)
+    await client.query('COMMIT')
+    return { ...registration, options }
+  } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error }
+  finally { client.release() }
 }
 function nextPoll(record: object): number | null {
   const item = record as { result?: { status?: string }; deadline?: number }

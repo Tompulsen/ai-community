@@ -14,3 +14,15 @@ export function environment(t, values) {
     t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous })
   }
 }
+
+// PGlite has one connection; serialize fixture transactions without pretending to test row-lock races.
+export function transactionalFixture(db) {
+  let tail = Promise.resolve()
+  return { query: db.query.bind(db), async connect() {
+    const previous = tail
+    let release
+    tail = new Promise(resolve => { release = resolve })
+    await previous
+    return { query: db.query.bind(db), release }
+  } }
+}
