@@ -4,7 +4,7 @@
  */
 import { createHash } from 'node:crypto';
 import { open, realpath, stat } from 'node:fs/promises';
-import { confinedFile, mediaState } from './media.ts';
+import { confinedFile } from './media.ts';
 import { readModerationSettings, type ModerationSettings } from './settings.ts';
 import { checkModerationMedia, hasSensitiveWord, maxModerationBytes, moderationBudgetMs } from './moderation-media.ts';
 import type { CreationModeration } from '../shared/work-moderation.ts';
@@ -17,7 +17,7 @@ interface Revision {
 }
 interface ModerationFile {
   id: string; name: string; type: string; size: number; md5: string | null; accessKey: string | null;
-  storedInternal: boolean; isLink: boolean; properties: Record<string, unknown> | null;
+  storedInternal: boolean; isLink: boolean;
 }
 interface FileSnapshot { id: string; identity: string; path?: string; disk?: string }
 export interface PreparedWorkModeration {
@@ -38,14 +38,14 @@ function policyKey(settings: ModerationSettings) {
   return createHash('sha256').update(JSON.stringify(settings)).digest('hex');
 }
 function fileIdentity(file: ModerationFile) {
-  return JSON.stringify([file.id, file.type, file.name, file.accessKey, file.size, file.md5, file.storedInternal, file.isLink, mediaState(file.properties)]);
+  return JSON.stringify([file.id, file.type, file.name, file.accessKey, file.size, file.md5, file.storedInternal, file.isLink]);
 }
 function diskIdentity(value: Awaited<ReturnType<typeof stat>>) {
   return JSON.stringify([String(value.dev), String(value.ino), value.size, value.mtimeMs, value.ctimeMs]);
 }
 async function filesFor(db: Queryable, ids: string[], ownerId: string, lock = false): Promise<ModerationFile[]> {
   if (!ids.length) return [];
-  const { rows } = await db.query<ModerationFile>(`SELECT id,name,type,size,md5,"accessKey","storedInternal","isLink",properties FROM drive_file WHERE id=ANY($1::varchar[]) AND "userId"=$2 ORDER BY id${lock ? ' FOR SHARE' : ''}`, [ids, ownerId]);
+  const { rows } = await db.query<ModerationFile>(`SELECT id,name,type,size,md5,"accessKey","storedInternal","isLink" FROM drive_file WHERE id=ANY($1::varchar[]) AND "userId"=$2 ORDER BY id${lock ? ' FOR SHARE' : ''}`, [ids, ownerId]);
   if (rows.length !== ids.length) failure(400, '附件不存在或不属于此作品作者。', 'WORK_ATTACHMENT_UNAVAILABLE');
   return rows;
 }
@@ -78,7 +78,8 @@ export async function prepareWorkModeration(ctx: RequestContext, ownerId: string
     for (const file of files) {
       // Executable skill packages keep their separate administrator trust review.
       if (revision.generation?.skill && !file.type.startsWith('image/')) { review = true; continue; }
-      if (!file.storedInternal || file.isLink || mediaState(file.properties) !== 'ready' ||
+      // Preview jobs run after upload; their status does not determine whether the original can be inspected.
+      if (!file.storedInternal || file.isLink ||
         !file.accessKey || file.size <= 0 || file.size > (file.type.startsWith('image/') ? 20 * 1024 * 1024 : maxModerationBytes) || Date.now() >= deadline) { review = true; continue; }
       try {
         const path = await confinedFile(await realpath(ctx.filesRoot), file.accessKey);

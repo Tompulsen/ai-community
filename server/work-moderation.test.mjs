@@ -5,6 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { handleContent } from './content.ts';
+import { uploadMedia } from './media.ts';
 import { prepareWorkModeration, commitWorkModeration } from './work-moderation.ts';
 
 const imageBytes = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#527183' } }).png().toBuffer();
@@ -68,6 +69,44 @@ test('clear images are immediately approved under either legacy publication sett
     assert(f.statements.some(({ sql }) => sql.includes('FROM drive_file') && sql.endsWith('FOR SHARE')));
     assert(f.statements.some(({ sql }) => sql.includes('FROM meta') && sql.endsWith('FOR SHARE')));
   });
+});
+
+test('freshly uploaded work and reference publish while their previews are still processing', async t => {
+  const f = await fixture(t, { files: [], body: { fileIds: ['uploaded1'], generation: { referenceFileIds: ['uploaded2'] } },
+    onBegin: (state, _row, files) => { if (state.calls === 2) for (const item of files) item.properties.communityMedia.state = 'ready'; } });
+  const query = async (sql, parameters = []) => {
+    if (sql.startsWith('SELECT policies')) return { rows: [{ policies: {}, clientOptions: {} }] };
+    if (sql.startsWith('INSERT INTO drive_file')) {
+      const [id, userId, md5, name, type, size, , accessKey, properties] = parameters;
+      f.files.push({ id, userId, md5, name, type, size, accessKey, properties, storedInternal: true, isLink: false });
+      return { rows: [], rowCount: 1 };
+    }
+    return f.ctx.db.query(sql, parameters);
+  };
+  for (const id of ['uploaded1', 'uploaded2']) {
+    const uploaded = await uploadMedia({ ...f.ctx, newId: () => id, request: { isMultipart: () => false },
+      body: { name: 'generated.png', type: 'image/png', data: imageBytes.toString('base64') },
+      redis: { eval: async () => 1, zrem: async () => 1 }, db: { query, connect: async () => ({ query, release() {} }) } });
+    assert.equal(uploaded.processing, 'pending');
+  }
+  await handleContent(f.ctx);
+  assert.equal(f.result.status, 201); assert(hasPublicWrite(f)); assert(hasReward(f)); assert.equal(f.state.calls, 2);
+  assert(f.files.every(item => item.properties.communityMedia.state === 'ready'));
+});
+
+test('preview job status cannot skip actual image rejection', async t => {
+  for (const state of ['pending', 'processing', 'failed']) await t.test(state, async t => {
+    const f = await fixture(t, { score: 0.99, files: [{ ...file, properties: { communityMedia: { state } } }] });
+    await assert.rejects(handleContent(f.ctx), e => e.statusCode === 422 && e.code === 'WORK_MODERATION_REJECTED');
+    assert.equal(f.state.calls, 1); assert(!hasPublicWrite(f)); assert(!hasReward(f));
+  });
+});
+
+test('a pending preview never authorizes a corrupt source file', async t => {
+  const f = await fixture(t, { files: [{ ...file, properties: { communityMedia: { state: 'pending' } } }] });
+  await writeFile(join(f.ctx.filesRoot, file.accessKey), 'corrupt image');
+  await assert.rejects(handleContent(f.ctx), e => e.code === 'WORK_MODERATION_UNAVAILABLE');
+  assert.equal(f.state.calls, 0); assert(!hasPublicWrite(f)); assert(!hasReward(f));
 });
 
 test('high-confidence image rejection returns a stable error without submission, public note or reward writes', async t => {
@@ -182,8 +221,8 @@ test('only sanitized public generation parameter string values participate in wo
   assert(hasPublicWrite(ignored)); assert.equal(ignored.state.calls, 0);
 });
 
-test('corrupt videos and processing, oversized or unavailable files cannot publish', async t => {
-  for (const changes of [{ type: 'video/mp4' }, { properties: { communityMedia: { state: 'pending' } } }, { size: 21 * 1024 * 1024 }, { isLink: true }, { storedInternal: false }]) await t.test(JSON.stringify(changes), async t => {
+test('corrupt videos and oversized or unavailable files cannot publish', async t => {
+  for (const changes of [{ type: 'video/mp4' }, { size: 21 * 1024 * 1024 }, { isLink: true }, { storedInternal: false }]) await t.test(JSON.stringify(changes), async t => {
     const f = await fixture(t, { files: [{ ...file, ...changes }], body: { kind: changes.type === 'video/mp4' ? 'video' : 'image' } });
     await assert.rejects(handleContent(f.ctx), e => e.code === 'WORK_MODERATION_UNAVAILABLE'); assert(!hasPublicWrite(f)); assert.equal(f.state.calls, 0);
   });
