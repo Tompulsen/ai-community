@@ -16,6 +16,7 @@ import { authServices, httpError, newId } from './auth.ts'
 import { handleContent } from './content.ts'
 import { handleImageExport } from './image-export.ts'
 import { handleLottery, startPendingWorker } from './lottery.ts'
+import { handleMaintenanceBenefits, startMaintenanceWorker } from './maintenance-benefits.ts'
 import { handleReferral } from './referral.ts'
 import { handleAccount } from './account.ts'
 import { handleSocial } from './social.ts'
@@ -213,6 +214,10 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     ['POST', ['/api/lottery/checkin', '/api/lottery/draw', '/api/admin/lottery/chances', '/api/admin/lottery/retry']],
     ['PATCH', ['/api/admin/lottery/config']],
   ])
+  register(handleMaintenanceBenefits, [
+    ['GET', ['/api/maintenance-benefit', '/api/maintenance-benefit/records', '/api/admin/maintenance-benefits']],
+    ['POST', ['/api/maintenance-benefit/display', '/api/maintenance-benefit/claim', '/api/admin/maintenance-benefits', '/api/admin/maintenance-benefits/retry']],
+  ])
   register(handleContent, [
     [['GET', 'HEAD'], ['/legacy-files/:id', '/files/:key']],
     ['GET', ['/api/works', '/api/community/works', '/api/library', '/api/admin/submissions', '/api/tags', '/api/creators', '/api/announcements',
@@ -292,11 +297,13 @@ export async function start(): Promise<FastifyInstance> {
   await checkRequestSchema(db)
   const app = createApplication({ db, redis, config, filesRoot: process.env.FILES_ROOT || '/app/files' })
   const stopWorker = process.env.DISABLE_LOTTERY_WORKER === '1' ? () => {} : startPendingWorker({ db, config, newId })
+  const stopMaintenance = process.env.DISABLE_LOTTERY_WORKER === '1' ? async () => {} : startMaintenanceWorker({ db, config, newId })
   const stopMedia = process.env.DISABLE_MEDIA_WORKER === '1' ? async () => {} : startMediaWorker({ db, filesRoot: process.env.FILES_ROOT || '/app/files' })
   const stopCreation = startCreationWorker(redis, db, process.env.FILES_ROOT || '/app/files')
   app.addHook('preClose', async () => { stopAcceptingCreations(redis); stopCreation() })
   app.addHook('onClose', async () => {
     stopWorker()
+    await stopMaintenance()
     stopCreation()
     await drainCreations(redis)
     await stopMedia()

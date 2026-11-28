@@ -73,7 +73,7 @@ function toggleDetails() {
   if (expanded.value && !loaded.value) void loadDetails()
 }
 function sourceName(source: string) {
-  return source === 'community_lottery' ? '活动抽奖' : source === 'qxchat_legacy' ? '历史福利' : '福利发放'
+  return source === 'community_lottery' ? '活动福利' : source === 'qxchat_legacy' ? '历史福利' : '福利发放'
 }
 function updateTime() {
   if (!active || document.visibilityState === 'hidden') return

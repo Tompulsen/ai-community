@@ -10,6 +10,7 @@ import '../welfare-tokens.css'
 import { api, errorMessage, loadSession, queryString, session } from '../state'
 import WelfareTasks from '../components/WelfareTasks.vue'
 import WelfareCheckin from '../components/WelfareCheckin.vue'
+import MaintenanceBenefitRecords from '../components/MaintenanceBenefitRecords.vue'
 import type { WelfareStatus } from '../../shared/welfare-points'
 import LotteryFeedbackDialog, { type LotteryAward as Award, type LotteryDraw as Draw, type LotteryNotice } from '../components/LotteryFeedbackDialog.vue'
 import { isClownPrize } from '../../shared/lottery-public'
@@ -358,6 +359,7 @@ async function draw() {
       <p class="reset-schedule"><strong>每天 00:00 统一重置</strong><span>北京时间 · 所有用户同步</span></p>
     </section>
     <WelfareCheckin v-if="status?.welfare?.pool && (tab === 'draw' || tab === 'tasks')" :welfare="status.welfare" :chances="status.balance" @refresh="load" @records="tab = 'records'" />
+    <MaintenanceBenefitRecords v-if="tab === 'records'" />
     <WelfareTasks v-if="tab === 'tasks'" :key="session.user?.id ?? 'guest'" ref="tasks" :lottery="loading || statusFailed ? null : status" :rules-loading="loading" />
     <div v-else-if="loading && !status && tab === 'draw'" class="activity-loading" role="status" aria-label="正在加载活动"><div class="skeleton" /><div class="skeleton" /></div>
     <template v-else-if="status || tab === 'records'">

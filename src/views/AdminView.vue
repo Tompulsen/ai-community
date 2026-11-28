@@ -5,6 +5,7 @@ import { ArrowUpRight, Bot, Check, ClipboardList, Flag, Gift, Globe, LayoutDashb
 import AdminOverview from '../components/AdminOverview.vue'
 import AdminLottery from '../components/AdminLottery.vue'
 import AdminWelfareTasks from '../components/AdminWelfareTasks.vue'
+import AdminMaintenanceBenefits from '../components/AdminMaintenanceBenefits.vue'
 import AdminLotteryChances from '../components/AdminLotteryChances.vue'
 import AdminCommunity from '../components/AdminCommunity.vue'
 import AdminModels from '../components/AdminModels.vue'
@@ -20,7 +21,7 @@ import { kindLabels, statusLabels, type AdminOverviewData, type Work, type WorkS
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
 
 const route = useRoute(), router = useRouter()
-type Tab = 'overview' | 'review' | 'lottery' | 'lottery-chances' | 'welfare' | 'site' | 'settings' | 'models' | 'image-concurrency' | 'skills' | 'tags' | 'ads' | 'users' | 'reports' | 'logs' | 'announcements' | 'audit' | 'roles'
+type Tab = 'overview' | 'review' | 'lottery' | 'lottery-chances' | 'welfare' | 'maintenance' | 'site' | 'settings' | 'models' | 'image-concurrency' | 'skills' | 'tags' | 'ads' | 'users' | 'reports' | 'logs' | 'announcements' | 'audit' | 'roles'
 const overview = ref<AdminOverviewData | null>(null), days = ref<7 | 30>(7)
 const status = ref<WorkStatus | 'all'>('pending'), query = ref(''), search = ref('')
 const works = ref<Work[]>([]), nextCursor = ref<string | null>(null), updatedAt = ref('')
@@ -47,6 +48,7 @@ const adminTabs = computed(() => [
     { id: 'announcements' as const, label: '公告管理', icon: Megaphone, group: '运营设置' },
     { id: 'lottery' as const, label: '活动抽奖', icon: Gift, group: '运营设置' },
     { id: 'welfare' as const, label: '福利任务', icon: ClipboardList, group: '运营设置' },
+    { id: 'maintenance' as const, label: '维护福利', icon: Gift, group: '运营设置' },
     { id: 'lottery-chances' as const, label: '抽奖次数', icon: Ticket, group: '运营设置' },
   ] : []),
 ])
@@ -181,6 +183,7 @@ async function review() {
         <AdminLotteryChances v-else-if="tab === 'lottery-chances' && session.user?.isAdmin" :key="session.user.id" ref="editor" :confirm-leave="confirmLeave" />
         <AdminLottery v-else-if="tab === 'lottery' && session.user?.isAdmin" :key="session.user.id" ref="editor" />
         <AdminWelfareTasks v-else-if="tab === 'welfare' && session.user?.isAdmin" :key="session.user.id" ref="editor" />
+        <AdminMaintenanceBenefits v-else-if="tab === 'maintenance' && session.user?.isAdmin" :key="session.user.id" ref="editor" :confirm-leave="confirmLeave" />
         <AdminCommunity v-else-if="(tab === 'site' || tab === 'settings' || tab === 'tags' || tab === 'ads') && session.user?.isAdmin" :key="`${session.user.id}:${tab}`" ref="editor" :view="tab" />
         <AdminModels v-else-if="tab === 'models' && session.user?.isAdmin" :key="session.user.id" ref="editor" :confirm-leave="confirmLeave" />
         <AdminImageConcurrencyPanel v-else-if="tab === 'image-concurrency' && session.user?.isAdmin" :key="session.user.id" ref="editor" :confirm-leave="confirmLeave" />

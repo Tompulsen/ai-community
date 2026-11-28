@@ -7,6 +7,7 @@ import AccountBalance from './components/AccountBalance.vue'
 import MessageCenterDialog from './components/MessageCenterDialog.vue'
 import AnnouncementPopup from './components/AnnouncementPopup.vue'
 import WelfareReminder from './components/WelfareReminder.vue'
+import MaintenanceBenefitPrompt from './components/MaintenanceBenefitPrompt.vue'
 import GooeyInput from './components/GooeyInput.vue'
 import BrowserStorageNotice from './components/BrowserStorageNotice.vue'
 import type { Work } from './data'
@@ -386,6 +387,7 @@ function restoreMessageTrigger() {
     <footer v-if="!guestAccount && !studioPage" class="app-footer"><span>{{ site.brand }}</span><RouterLink to="/messages?tab=announcement">公告</RouterLink></footer>
     <AnnouncementPopup />
     <WelfareReminder />
+    <MaintenanceBenefitPrompt />
     <nav v-if="!guestAccount && !workPage" class="mobile-nav" aria-label="手机导航">
       <RouterLink to="/discover" :class="{ active: feedPage }" :aria-current="feedPage ? 'page' : undefined">首页</RouterLink>
       <RouterLink to="/create/video" :class="{ active: studioPage }" :aria-current="studioPage ? 'page' : undefined">创作</RouterLink>
