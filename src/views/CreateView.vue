@@ -130,7 +130,8 @@ watch([kind, () => chats.ready, () => creation.loaded], async () => {
   preferred.composerKind = requestedKind
   activateConversation(preferred.id)
 }, { immediate: true })
-watch([() => route.query.conversation, kind, workspace, () => chats.ready, () => creation.loaded], async () => {
+// Mounting the composer during navigation must not reactivate the previous route's chat.
+watch([() => route.query.conversation, kind, () => chats.ready, () => creation.loaded], async () => {
   const id = route.query.conversation, entryStart = route.query.start === '1'
   if (typeof id !== 'string' || !chats.ready || !creation.loaded) return
   const selected = chats.sessions.find(chat => chat.id === id)
@@ -278,6 +279,8 @@ function clearContext() {
 }
 function syncSource(id?: string) {
   if (route.query.entry || route.query.start || route.query.skill) return
+  const active = currentConversation.value
+  if (active && (active.composerKind || conversationKind(active)) !== kind.value) return
   if (id && (route.query.remix === id || route.query.from === id)) return
   source.value = null
   void router.replace({ query: { ...(route.query.conversation === chats.activeId ? { conversation: route.query.conversation } : {}), ...(id ? { remix: id } : {}) } })
