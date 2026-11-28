@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Copy, CopyPlus, Download, ImagePlus, Maximize, MessageSquareText, Pencil, RefreshCw, Square, Trash2 } from '@lucide/vue'
-import { copyCreationImage, creationRequestTimedOut, downloadCreation, mediaSource, resumeCreation, stopCreation, type CreationDestination, type CreationTask } from '../../native-studio'
+import { copyCreationImage, creationRequestTimedOut, downloadCreation, downloadCreationSelection, mediaSource, resumeCreation, stopCreation, type CreationDestination, type CreationTask } from '../../native-studio'
 import { chats, togglePinnedMessage, type NativeChat } from '../../native-chat'
 import { branchMessages } from '../../../shared/studio/chat-branches'
 import { confirmStudioDelete } from '../../studio-confirm'
@@ -40,7 +40,7 @@ const busy = computed(() => isConversationBusy(props.conversation))
 const downloading = ref(false)
 let downloadController: AbortController | undefined
 onUnmounted(() => downloadController?.abort())
-watch(() => props.task.id, () => downloadController?.abort())
+watch([() => session.user?.id, () => props.task.id], () => downloadController?.abort())
 const pinMessageId = computed(() => {
   const answer = branchMessages(props.conversation).find(message => message.role === 'assistant' && 'taskId' in message && message.taskId === props.task.id)
   return props.role === 'assistant' ? answer?.id : answer?.parentId
@@ -62,9 +62,8 @@ async function downloadAll() {
     const hasImages = task.kind === 'image' && task.urls.length > 0
     const format = hasImages ? await chooseImageDownloadFormat(controller.signal, () => props.task === task && owner === session.user?.id) : undefined
     if (hasImages && !format || controller.signal.aborted) return
-    for (const index of task.urls.length ? task.urls.map((_, index) => index) : [0]) {
-      await downloadCreation(task, index, controller.signal, undefined, format)
-    }
+    const items = task.urls.length ? task.urls.map((_, index) => ({ task, index })) : [{ task, index: 0 }]
+    await downloadCreationSelection(items, controller.signal, format)
   })
   downloadController = undefined
   downloading.value = false

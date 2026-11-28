@@ -1,4 +1,5 @@
 import { confirmImageDownload } from './helpers/image-download'
+import { readDownloadArchive } from './helpers/download-archive'
 import { expect, test, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
@@ -337,7 +338,7 @@ test('generated images save original bytes automatically and survive an expired 
   await page.getByRole('button', { name: '下载图片', exact: true }).click()
   await confirmImageDownload(page)
   const file = await download
-  expect((await readFile((await file.path())!))).toEqual(image)
+  expect([...(await readDownloadArchive(file)).values()]).toEqual([image, image])
   await page.getByRole('button', { name: '编辑图片', exact: true }).click()
   const nextGeneration = page.waitForRequest('**/api/creation/generate')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()

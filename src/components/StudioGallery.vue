@@ -5,7 +5,7 @@ import { chooseImageDownloadFormat } from '../image-download-choice'
 import type { ImageDownloadChoice } from '../../shared/image-download'
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { CopyPlus, Download, ImagePlus, Images, LoaderCircle, RefreshCw, Search, SlidersHorizontal, SquareMousePointer, Trash2, Upload, X } from '@lucide/vue'
-import { canonicalCreationTask, copyCreationImage, creation, downloadCreation, hideGalleryOutputs, mediaSettings, mediaSource, prepareCreationHistory, removeCreationTasks, saveCreationLocally, updateMediaSettings, type CreationTask, type CreationDestination, type CreationKind } from '../native-studio'
+import { canonicalCreationTask, copyCreationImage, creation, downloadCreation, downloadCreationSelection, hideGalleryOutputs, mediaSettings, mediaSource, prepareCreationHistory, removeCreationTasks, saveCreationLocally, updateMediaSettings, type CreationTask, type CreationDestination, type CreationKind } from '../native-studio'
 import { errorMessage, session } from '../state'
 import { galleryOutputIndexes, getTaskPage, getTaskStorageSize, getTaskSummary, type TaskPageQuery } from '../studio-task-store'
 import StudioGalleryCover from './StudioGalleryCover.vue'
@@ -19,6 +19,7 @@ const batchMode = ref(false), selected = ref<string[]>([]), error = ref(''), bus
 const rows = ref<CreationTask[]>([]), total = ref<number>(), modelOptions = ref<string[]>([]), storageBytes = ref<number>()
 const after = ref<{ createdAt: number; id: string }>(), pageSize = 60
 const exportProgress = ref<{ current: number; total: number }>()
+const exportError = ref('')
 const settingsId = `gallery-settings-${useId()}`, settingsButton = ref<HTMLButtonElement>(), settingsOpen = ref(false)
 const preview = ref<{ task: CreationTask; indexes: number[] }>(), previewer = ref<InstanceType<typeof StudioMediaPreview>>()
 const previewItems = computed(() => preview.value ? preview.value.indexes.map(index => ({
@@ -36,6 +37,7 @@ type GalleryItem = { key: string; task: CreationTask; index: number }
 const items = computed<GalleryItem[]>(() => visible.value.flatMap(task => view.value === 'gallery'
   ? galleryOutputIndexes(task).map(index => ({ key: `${task.id}:${index}`, task, index }))
   : [{ key: `${task.id}:task`, task, index: 0 }]))
+const allSelected = computed(() => selected.value.length > 0 && selected.value.length === total.value)
 const hasFilters = computed(() => !!(query.value.trim() || modelFilter.value || timeFilter.value || filter.value !== 'all'))
 const storageLabel = computed(() => {
   const bytes = storageBytes.value
@@ -56,7 +58,7 @@ function filters(): TaskPageQuery {
 }
 function cancelOperation() {
   operation++; downloadController?.abort(); downloadController = undefined
-  busy.value = false; exportProgress.value = undefined
+  busy.value = false; exportProgress.value = undefined; exportError.value = ''
 }
 watch(() => session.user?.id, () => {
   revision++; previewRevision++; cancelOperation(); previewer.value?.close(); preview.value = undefined
@@ -100,13 +102,13 @@ watch([() => session.user?.id, () => props.kind, () => props.previewOnly], () =>
 watch([view, filter, query, modelFilter, timeFilter], () => { revision++; currentFilters = undefined; after.value = undefined; total.value = undefined; cancelOperation(); selected.value = []; batchMode.value = false; scheduleRefresh(true) })
 watch(() => creation.historyRevision, () => { if (!preparing) scheduleRefresh() })
 onBeforeUnmount(() => { revision++; cancelOperation(); clearTimeout(refreshTimer) })
-async function run(action: (current: () => boolean) => Promise<unknown>) {
+async function run(action: (current: () => boolean) => Promise<unknown>, failure = error) {
   if (busy.value) return
   const owner = session.user?.id, accepted = ++operation
   const current = () => accepted === operation && owner === session.user?.id
-  busy.value = true; error.value = ''
+  busy.value = true; error.value = ''; exportError.value = ''
   try { await action(current) }
-  catch (cause) { if (current()) error.value = errorMessage(cause) }
+  catch (cause) { if (current()) failure.value = errorMessage(cause) }
   finally { if (current()) { busy.value = false; downloadController = undefined; exportProgress.value = undefined } }
 }
 async function allMatching(current: () => boolean) {
@@ -155,11 +157,12 @@ async function removeItems(chosen: GalleryItem[], current: () => boolean) {
   if (current()) { selected.value = []; batchMode.value = false; await loadPage() }
 }
 async function removeSelected() { await run(async current => { const found = await allMatching(current); await removeItems(found.filter(item => selected.value.includes(item.key)), current) }) }
-async function exportItems(onlySelected = false) {
+async function exportSelected() {
   await run(async current => {
+    const keys = new Set(selected.value)
     const found = await allMatching(current)
     if (!current()) return
-    const picked = onlySelected ? found.filter(item => selected.value.includes(item.key)) : found
+    const picked = found.filter(item => keys.has(item.key))
     const completed = picked.filter(item => item.task.phase === 'complete' && (item.task.urls.length || item.task.kind === 'text' && item.task.text.trim()))
     const chosen = view.value === 'gallery' ? picked : completed.flatMap(item => item.task.urls.length
       ? item.task.urls.map((_, index) => ({ ...item, index })) : [item])
@@ -170,13 +173,10 @@ async function exportItems(onlySelected = false) {
     const format = hasImages ? await chooseImageDownloadFormat(controller.signal, current) : undefined
     if (!current() || hasImages && !format) return
     exportProgress.value = { current: 0, total: chosen.length }
-    for (const [position, item] of chosen.entries()) {
-      if (!current()) return
-      await downloadCreation(canonicalCreationTask(item.task), item.index, controller.signal, undefined, format)
-      if (!current()) return
-      exportProgress.value = { current: position + 1, total: chosen.length }
-    }
-  })
+    await downloadCreationSelection(chosen, controller.signal, format, finished => {
+      if (current()) exportProgress.value = { current: finished, total: chosen.length }
+    })
+  }, exportError)
 }
 async function clearFailed() {
   await run(async current => {
@@ -218,16 +218,22 @@ function reuse(task: CreationTask) { emit('reuse', canonicalCreationTask(task)) 
         <select v-model="timeFilter" class="control" aria-label="按时间筛选"><option value="">全部时间</option><option value="today">今天</option><option value="week">最近 7 天</option><option value="month">最近 30 天</option><option value="year">最近一年</option></select>
       </div>
       <div class="gallery-info-bar batch-toolbar">
-        <div class="gallery-stats"><span>{{ total ?? '—' }} 条<span v-if="batchMode"> · 已选 {{ selected.length }}</span></span><span>本地缓存 {{ storageLabel }}</span></div>
+        <div class="gallery-stats"><span>{{ total ?? '—' }} 条<span v-if="batchMode" role="status"> · 已选 {{ selected.length }} 件</span></span><span>本地缓存 {{ storageLabel }}</span></div>
         <div class="gallery-actions">
-          <template v-if="batchMode"><button class="gallery-action" type="button" :disabled="busy" aria-label="全选筛选结果" @click="selectAll"><SquareMousePointer :size="15" />全选</button><button class="gallery-action" type="button" :disabled="busy || !selected.length" aria-label="下载选中记录" @click="exportItems(true)"><Download :size="15" /><span>下载 {{ selected.length || '' }}</span></button><button class="gallery-action danger" type="button" :disabled="busy || !selected.length" aria-label="删除选中记录" @click="removeSelected"><Trash2 :size="15" /><span>{{ view === 'gallery' ? '移除' : '删除' }}</span></button><button class="gallery-action" type="button" :disabled="busy" aria-label="取消选择" @click="batchMode = false; selected = []"><X :size="15" />取消</button></template>
-          <template v-else><button class="gallery-action" type="button" :disabled="busy || !total" @click="batchMode = true"><SquareMousePointer :size="15" />批量选择</button><button class="gallery-action" type="button" :disabled="busy || !total" aria-label="导出全部筛选结果" @click="exportItems()"><Download :size="15" />导出全部</button></template>
+          <template v-if="batchMode">
+            <button class="gallery-action" type="button" :disabled="busy" :aria-label="allSelected ? '取消全选' : '全选筛选结果'" @click="allSelected ? selected = [] : selectAll()"><SquareMousePointer :size="15" />{{ allSelected ? '取消全选' : '全选' }}</button>
+            <button class="gallery-action" type="button" :disabled="busy || !selected.length" @click="exportSelected"><Download :size="15" />导出所选</button>
+            <button class="gallery-action danger" type="button" :disabled="busy || !selected.length" aria-label="删除选中记录" @click="removeSelected"><Trash2 :size="15" /><span>{{ view === 'gallery' ? '移除' : '删除' }}</span></button>
+            <button class="gallery-action" type="button" :disabled="busy" aria-label="取消选择" @click="batchMode = false; selected = []; exportError = ''"><X :size="15" />取消</button>
+          </template>
+          <button v-else class="gallery-action" type="button" :disabled="busy || !total" @click="batchMode = true"><SquareMousePointer :size="15" />批量操作</button>
           <button ref="settingsButton" class="gallery-settings-trigger" type="button" :popovertarget="settingsId" aria-label="作品库设置" title="作品库设置" aria-haspopup="dialog" :aria-expanded="settingsOpen"><SlidersHorizontal :size="18" /></button>
           <div :id="settingsId" popover="auto" role="dialog" aria-label="作品库设置" class="gallery-settings-content" @toggle="toggleSettings"><label><span>自动收录作品</span><input type="checkbox" role="switch" :checked="mediaSettings.autoSaveGallery" :disabled="!mediaSettings.loaded || busy" @change="run(() => updateMediaSettings({ autoSaveGallery: ($event.target as HTMLInputElement).checked }))" /></label><label><span>自动下载作品</span><input type="checkbox" role="switch" :checked="mediaSettings.autoDownload" :disabled="!mediaSettings.loaded || busy" @change="run(() => updateMediaSettings(($event.target as HTMLInputElement).checked))" /></label><div class="gallery-location"><span>下载位置</span><span>浏览器默认</span></div><button class="gallery-action" type="button" :disabled="busy" @click="clearFailed"><Trash2 :size="15" />清理失败记录</button></div>
         </div>
       </div>
-      <div v-if="batchMode" class="gallery-page-selection"><label><input type="checkbox" aria-label="选择当前页" :checked="items.length > 0 && items.every(item => selected.includes(item.key))" :disabled="busy" @change="selected = ($event.target as HTMLInputElement).checked ? [...new Set([...selected, ...items.map(item => item.key)])] : selected.filter(key => !items.some(item => item.key === key))" />选择当前页</label><span role="status">已选 {{ selected.length }} 件</span></div>
-      <p v-if="error" class="gallery-error" role="alert">{{ error }}<button class="gallery-action" type="button" :disabled="busy || loading" @click="loadPage(false, true)">重试</button></p>
+      <div v-if="batchMode && after" class="gallery-page-selection"><label><input type="checkbox" aria-label="选择当前页" :checked="items.length > 0 && items.every(item => selected.includes(item.key))" :disabled="busy" @change="selected = ($event.target as HTMLInputElement).checked ? [...new Set([...selected, ...items.map(item => item.key)])] : selected.filter(key => !items.some(item => item.key === key))" />选择当前页</label></div>
+      <p v-if="exportError" class="gallery-error" role="alert">{{ exportError }}<button class="gallery-action" type="button" :disabled="busy || !selected.length" @click="exportSelected">重新导出</button></p>
+      <p v-else-if="error" class="gallery-error" role="alert">{{ error }}<button class="gallery-action" type="button" :disabled="busy || loading" @click="loadPage(false, true)">重试</button></p>
     </div>
     <div class="gallery-scroll" :aria-busy="loading">
       <p v-if="loading && !items.length" class="gallery-empty" role="status"><LoaderCircle :size="24" />正在读取作品记录…</p>

@@ -1,5 +1,6 @@
 import { confirmImageDownload } from './helpers/image-download'
-import { expect, test, type Page } from '@playwright/test'
+import { readDownloadArchive } from './helpers/download-archive'
+import { expect, test, type Download, type Locator, type Page } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
 import sharp from 'sharp'
 import { mockUnifiedAccount } from './helpers/account-fixture'
@@ -11,8 +12,6 @@ async function fixture(page: Page, count = 3, multi = false, failures = false, r
     create: { width: 800, height: 600, channels: 3, background },
   }).jpeg().toBuffer()))
   const generation: any[] = [], media: string[] = []
-  const gate = { enabled: false, release: () => {}, entered: 0 }
-  const waiting = new Promise<void>(resolve => { gate.release = resolve })
   await page.route('**/api/creation/**', async route => {
     const url = new URL(route.request().url()), path = url.pathname
     if (path.endsWith('/models')) return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-5', kinds: ['text'] }, { id: 'gpt-image-2', kinds: ['image'] }] } })
@@ -20,7 +19,6 @@ async function fixture(page: Page, count = 3, multi = false, failures = false, r
     if (path.endsWith('/mcp/status')) return route.fulfill({ json: { enabled: false, items: [] } })
     if (path.endsWith('/media')) {
       media.push(url.searchParams.get('url') || '')
-      if (gate.enabled) { gate.entered++; await waiting }
       const index = Number(/output-(\d)/.exec(url.searchParams.get('url') || '')?.[1] || 0)
       return route.fulfill({ contentType: 'image/jpeg', body: pictures[index % 3]! }).catch(() => {})
     }
@@ -55,7 +53,17 @@ async function fixture(page: Page, count = 3, multi = false, failures = false, r
   const library = page.getByRole('dialog', { name: '作品库', exact: true })
   await expect(library).toBeVisible()
   await expect(library.locator('.gallery-item')).toHaveCount(failures ? Math.max(0, count - 3) : Math.min(count, 60) + (multi ? 2 : 0))
-  return { library, ...account, generation, media, gate }
+  return { library, ...account, generation, media, pictures }
+}
+async function selectAll(library: Locator) {
+  await library.getByRole('button', { name: '批量操作', exact: true }).click()
+  await library.getByRole('button', { name: '全选筛选结果', exact: true }).click()
+}
+async function exportSelection(page: Page, library: Locator) {
+  const download = page.waitForEvent('download')
+  await library.getByRole('button', { name: '导出所选', exact: true }).click()
+  await confirmImageDownload(page)
+  return download
 }
 async function stored(page: Page) {
   return page.evaluate(async () => {
@@ -73,8 +81,7 @@ async function setOwner(page: Page, id: string) {
 
 test('old library layout has a fixed toolbar, a scrollable grid, narrow two-column cards and full-filter selection', async ({ page }) => {
   const { library, generation } = await fixture(page, 73)
-  await library.getByRole('button', { name: '批量选择', exact: true }).click()
-  await library.getByRole('button', { name: '全选筛选结果', exact: true }).click()
+  await selectAll(library)
   await expect(library.locator('.batch-toolbar')).toContainText('已选 73')
   await library.locator('.gallery-item .task-prompt').first().click()
   await expect(library.locator('.batch-toolbar')).toContainText('已选 72')
@@ -179,38 +186,86 @@ test('automatic library collection is independent of original downloads and pres
   expect(generation).toHaveLength(2)
 })
 
-test('switching A to B and back aborts a pending export without late files or progress', async ({ page }) => {
-  const { library, state, gate, generation } = await fixture(page, 3)
-  const downloads: string[] = []
-  page.on('download', download => downloads.push(download.suggestedFilename()))
-  await expect(library.locator('.gallery-cover img')).toHaveCount(3)
-  await expect.poll(() => library.locator('.gallery-cover img').evaluateAll(images => images.every(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true)
+for (const action of ['stop', 'switch account'] as const) {
+  test(`pending export produces no late downloads after ${action}`, async ({ page }) => {
+    const { library, state, generation } = await fixture(page, 3)
+    const downloads: string[] = []
+    page.on('download', download => downloads.push(download.suggestedFilename()))
+    await expect(library.locator('.gallery-cover img')).toHaveCount(3)
+    await expect.poll(() => library.locator('.gallery-cover img').evaluateAll(images => images.every(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true)
+    await page.evaluate(() => {
+      const stream = Blob.prototype.stream
+      let originals = 0
+      Blob.prototype.stream = function () {
+        const source = stream.call(this)
+        if (this.type !== 'image/jpeg' || ++originals !== 2) return source
+        Blob.prototype.stream = stream
+        const reader = source.getReader()
+        const gate = new Promise<void>(resolve => { (window as any).releaseExport = resolve })
+        return new ReadableStream({
+          async pull(controller) {
+            await gate
+            const { done, value } = await reader.read()
+            if (done) controller.close()
+            else controller.enqueue(value)
+          },
+          cancel: reason => reader.cancel(reason),
+        })
+      }
+    })
+    try {
+      await selectAll(library)
+      await library.getByRole('button', { name: '导出所选', exact: true }).click()
+      await confirmImageDownload(page)
+      await expect.poll(() => page.evaluate(() => Boolean((window as any).releaseExport))).toBe(true)
+      await expect(library.getByRole('progressbar', { name: '作品导出进度', exact: true })).toBeVisible()
+      if (action === 'stop') {
+        await library.getByRole('button', { name: '停止下载', exact: true }).click()
+      } else {
+        state.user.id = '18'; await setOwner(page, '18')
+        await expect(library).not.toBeVisible()
+        state.user.id = '17'; await setOwner(page, '17')
+        await page.getByRole('button', { name: '作品库', exact: true }).click()
+      }
+    } finally { await page.evaluate(() => (window as any).releaseExport?.()) }
+    await expect(library.locator('.gallery-item')).toHaveCount(3)
+    await expect(library.locator('.gallery-export')).toHaveCount(0)
+    expect(downloads).toHaveLength(0)
+    expect(generation).toHaveLength(0)
+  })
+}
+
+test('three selected originals download together after retrying a missing second image', async ({ page }) => {
+  const { library, pictures } = await fixture(page, 1, true)
+  const downloads: Download[] = []
+  page.on('download', download => downloads.push(download))
+  await expect(library.locator('.browser-save').first()).toHaveText('图片已保存到此浏览器')
+  await expect.poll(() => library.locator('.gallery-cover img').evaluateAll(images => images.length === 3 && images.every(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true)
+  await selectAll(library)
+  await expect(library.locator('.gallery-stats')).toContainText('已选 3 件')
+  await expect(library.getByRole('checkbox', { name: '选择当前页' })).toHaveCount(0)
   await page.evaluate(() => {
-    const fetchOriginal = window.fetch.bind(window)
-    ;(window as any).exportEntered = 0
-    window.fetch = async (input, init) => {
-      if (!String(input).startsWith('blob:')) return fetchOriginal(input, init)
-      ;(window as any).exportEntered++
-      return new Promise((resolve, reject) => {
-        ;(window as any).releaseExport = () => resolve(fetchOriginal(input, init))
-        init?.signal?.addEventListener('abort', () => reject(new DOMException('Stopped', 'AbortError')), { once: true })
-      })
+    const get = IDBObjectStore.prototype.get
+    IDBObjectStore.prototype.get = function (key) {
+      if (this.name === 'originals' && Array.isArray(key) && key[1] === 'reuse-0:1') {
+        IDBObjectStore.prototype.get = get
+        return get.call(this, ['17', 'missing-original'])
+      }
+      return get.call(this, key)
     }
   })
-  try {
-    await library.getByRole('button', { name: '导出全部筛选结果', exact: true }).click()
-    await confirmImageDownload(page)
-    await expect.poll(() => page.evaluate(() => (window as any).exportEntered)).toBe(1)
-    await expect(library.getByRole('progressbar', { name: '作品导出进度', exact: true })).toBeVisible()
-    state.user.id = '18'; await setOwner(page, '18')
-    await expect(library).not.toBeVisible()
-    state.user.id = '17'; await setOwner(page, '17')
-  } finally { gate.release(); await page.evaluate(() => (window as any).releaseExport?.()) }
-  await page.getByRole('button', { name: '作品库', exact: true }).click()
-  await expect(library.locator('.gallery-item')).toHaveCount(3)
-  await expect(library.locator('.gallery-export')).toHaveCount(0)
+  await library.getByRole('button', { name: '导出所选', exact: true }).click()
+  await confirmImageDownload(page)
+  await expect(library.getByRole('alert')).toContainText('第 2 项导出失败')
   expect(downloads).toHaveLength(0)
-  expect(generation).toHaveLength(0)
+
+  const retry = page.waitForEvent('download')
+  await library.getByRole('button', { name: '重新导出', exact: true }).click()
+  await confirmImageDownload(page)
+  const entries = await readDownloadArchive(await retry)
+  expect([...entries.keys()]).toEqual([1, 2, 3].map(index => expect.stringContaining(`creation-reuse-0-${index}.jpg`)))
+  expect([...entries.values()].map((file, index) => file.equals(pictures[index]!))).toEqual([true, true, true])
+  expect(downloads).toHaveLength(1)
 })
 
 test('failed-record cleanup preserves paused and attention tasks', async ({ page }) => {
@@ -224,49 +279,52 @@ test('failed-record cleanup preserves paused and attention tasks', async ({ page
   expect(generation).toHaveLength(0)
 })
 
-test('selected downloads keep nonadjacent output indexes and export-all follows the current filters', async ({ page }) => {
-  const { library, generation } = await fixture(page, 4, true)
-  const downloads: string[] = []
-  page.on('download', download => downloads.push(download.suggestedFilename()))
-  await library.getByRole('button', { name: '批量选择', exact: true }).click()
+test('manual selection and filtered select-all each download one ZIP containing the chosen originals', async ({ page }) => {
+  const { library, generation, pictures } = await fixture(page, 4, true)
+  const downloads: Download[] = []
+  page.on('download', download => downloads.push(download))
+  await expect(library.getByRole('button', { name: /导出全部/ })).toHaveCount(0)
+  await library.getByRole('button', { name: '批量操作', exact: true }).click()
+  await expect(library.getByRole('button', { name: '导出所选', exact: true })).toBeDisabled()
   await library.getByRole('checkbox', { name: '选择 作品 0 · 1', exact: true }).check()
   await library.getByRole('checkbox', { name: '选择 作品 0 · 3', exact: true }).check()
-  await library.getByRole('button', { name: '下载选中记录', exact: true }).click()
-  await confirmImageDownload(page)
-  await expect.poll(() => downloads.length).toBe(2)
+  const selectedDownload = await exportSelection(page, library)
+  expect(selectedDownload.suggestedFilename()).toMatch(/\.zip$/i)
+  const selected = await readDownloadArchive(selectedDownload)
+  expect([...selected.keys()]).toEqual([
+    expect.stringMatching(/creation-reuse-0-1\.jpg$/), expect.stringMatching(/creation-reuse-0-3\.jpg$/),
+  ])
+  expect([...selected.values()].map((file, i) => file.equals(pictures[i * 2]!))).toEqual([true, true])
   await expect(library.locator('.gallery-export')).toHaveCount(0)
-  expect(downloads).toEqual(['creation-reuse-0-1.jpg', 'creation-reuse-0-3.jpg'])
+  expect(downloads).toHaveLength(1)
+
   await library.getByRole('button', { name: '取消选择', exact: true }).click()
   await library.getByRole('combobox', { name: '按模型筛选', exact: true }).selectOption('flux')
   await expect(library.locator('.gallery-item')).toHaveCount(2)
-  await library.getByRole('button', { name: '导出全部筛选结果', exact: true }).click()
-  await confirmImageDownload(page)
-  await expect.poll(() => downloads.length).toBe(4)
-  expect(downloads.slice(2)).toEqual(['creation-reuse-1-1.jpg', 'creation-reuse-3-1.jpg'])
+  await selectAll(library)
+  const filtered = await readDownloadArchive(await exportSelection(page, library))
+  expect([...filtered.keys()]).toEqual([
+    expect.stringMatching(/creation-reuse-1-1\.jpg$/), expect.stringMatching(/creation-reuse-3-1\.jpg$/),
+  ])
+  expect([...filtered.values()].every(file => file.equals(pictures[0]!))).toBe(true)
+  expect(downloads).toHaveLength(2)
   expect(generation).toHaveLength(0)
 })
 
-test('export-all requests every matching download beyond the initially loaded page', async ({ page }) => {
-  const { library, generation } = await fixture(page, 65)
-  const downloads: string[] = []
-  page.on('download', download => downloads.push(download.suggestedFilename()))
-  await page.evaluate(() => {
-    const click = HTMLAnchorElement.prototype.click
-    ;(window as any).requestedGalleryDownloads = []
-    HTMLAnchorElement.prototype.click = function (...args) {
-      if (this.download.startsWith('creation-')) (window as any).requestedGalleryDownloads.push(this.download)
-      return Reflect.apply(click, this, args)
-    }
-  })
+test('select-all exports all 65 originals in one ZIP while only the first 60 cards are loaded', async ({ page }) => {
+  const { library, generation, pictures } = await fixture(page, 65)
+  const downloads: Download[] = []
+  page.on('download', download => downloads.push(download))
   await expect(library.locator('.gallery-item')).toHaveCount(60)
-  await library.getByRole('button', { name: '导出全部筛选结果', exact: true }).click()
-  await confirmImageDownload(page)
-  await expect.poll(() => page.evaluate(() => (window as any).requestedGalleryDownloads.length)).toBe(65)
+  await selectAll(library)
+  await expect(library.locator('.batch-toolbar')).toContainText('已选 65')
+  const entries = await readDownloadArchive(await exportSelection(page, library))
+  expect([...entries.keys()].map(name => name.slice(name.indexOf('creation-')))).toEqual(
+    Array.from({ length: 65 }, (_, i) => `creation-reuse-${i}-1.jpg`),
+  )
+  expect([...entries.values()].every(file => file.equals(pictures[0]!))).toBe(true)
   await expect(library.locator('.gallery-export')).toHaveCount(0)
-  const requested = await page.evaluate(() => (window as any).requestedGalleryDownloads as string[])
-  expect(new Set(requested).size).toBe(65)
-  expect(requested).toEqual(expect.arrayContaining(['creation-reuse-0-1.jpg', 'creation-reuse-64-1.jpg']))
-  expect(downloads.length).toBeGreaterThan(0)
+  expect(downloads).toHaveLength(1)
   expect(generation).toHaveLength(0)
 })
 
@@ -323,8 +381,7 @@ test('relative-date pagination and select-all share one boundary while a new-day
   await expect(library.locator('.gallery-scroll')).toHaveAttribute('aria-busy', 'false')
   await expect(library.locator('.gallery-stats')).toContainText('65 条')
   expect(await page.evaluate(() => (window as any).relativeDateSummaryReads)).toBe(0)
-  await library.getByRole('button', { name: '批量选择', exact: true }).click()
-  await library.getByRole('button', { name: '全选筛选结果', exact: true }).click()
+  await selectAll(library)
   await expect(library.locator('.batch-toolbar')).toContainText('已选 65')
   await library.getByRole('combobox', { name: '按时间筛选', exact: true }).selectOption('today')
   await expect(library.locator('.gallery-stats')).toContainText('64 条')
@@ -362,13 +419,12 @@ test('mixed task export skips unfinished outputs and deleting completed tasks pr
   page.on('download', download => downloads.push(download.suggestedFilename()))
   await library.getByRole('tab', { name: '任务', exact: true }).click()
   await expect(library.locator('.gallery-item')).toHaveCount(4)
-  await library.getByRole('button', { name: '导出全部筛选结果', exact: true }).click()
+  await selectAll(library)
+  await library.getByRole('button', { name: '导出所选', exact: true }).click()
   await confirmImageDownload(page)
   await expect.poll(() => downloads.length).toBe(1)
   await expect(library.locator('.gallery-export')).toHaveCount(0)
   expect(downloads).toEqual(['creation-reuse-3-1.jpg'])
-  await library.getByRole('button', { name: '批量选择', exact: true }).click()
-  await library.getByRole('button', { name: '全选筛选结果', exact: true }).click()
   await library.getByRole('button', { name: '删除选中记录', exact: true }).click()
   await page.getByRole('dialog', { name: '删除确认', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click()
   await expect(library.locator('.gallery-item')).toHaveCount(2)

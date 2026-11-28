@@ -1339,13 +1339,21 @@ export function cacheCreationImages(value: CreationTask, retry = false): Promise
   imageSaves.set(key, { controller, promise })
   return promise
 }
-function requestDownload(blob: Blob, task: CreationTask, index: number) {
+function creationFilename(blob: Blob, task: CreationTask, index: number) {
   const extensions: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-matroska': 'mkv', 'text/markdown': 'md' }
-  const link = document.createElement('a'), objectUrl = URL.createObjectURL(blob)
-  link.href = objectUrl; link.download = `creation-${task.id}-${index + 1}.${extensions[blob.type.split(';')[0]!] || 'bin'}`
+  return `creation-${task.id}-${index + 1}.${extensions[blob.type.split(';')[0]!] || 'bin'}`
+}
+function downloadLink(url: string, filename: string) {
+  const link = document.createElement('a')
+  link.href = url; link.download = filename
   document.body.appendChild(link)
   try { link.click() }
-  finally { link.remove(); setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000) }
+  finally { link.remove() }
+}
+function requestDownload(blob: Blob, filename: string) {
+  const objectUrl = URL.createObjectURL(blob)
+  try { downloadLink(objectUrl, filename) }
+  finally { setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000) }
 }
 async function cacheDownloadedImage(task: CreationTask, index: number, source: string, blob: Blob) {
   if (task.kind !== 'image' || source.startsWith('studio-asset:')) return source
@@ -1396,7 +1404,7 @@ export function saveCreationLocally(value: CreationTask): Promise<void> {
         task.localSave = { state: 'saving', completed: index + 1, requestedAt: Date.now() }
         try { await persist(true); check() }
         catch (cause) { task.localSave.completed = completed; throw cause }
-        try { requestDownload(blob, task, index) }
+        try { requestDownload(blob, creationFilename(blob, task, index)) }
         catch (cause) { task.localSave.completed = completed; throw cause }
         completed = index + 1
       }
@@ -1423,43 +1431,86 @@ async function autoDownloadCreation(task: CreationTask) {
   }
   catch { /* Save errors stay on the result; generation has already completed. */ }
 }
-export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal, content?: string, format?: ImageDownloadChoice) {
-  if (task.purpose === 'document') throw new Error('请在文本聊天的文档卡片下载 Word / Excel 文件。')
+function checkCreationDownload(task: CreationTask, version: number, signal?: AbortSignal) {
   signal?.throwIfAborted()
-  if (task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
+  if (version !== epoch || task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
+  if (task.purpose === 'document') throw new Error('请在文本聊天的文档卡片下载 Word / Excel 文件。')
+}
+async function creationDownloadBlob(task: CreationTask, index: number, version: number, signal?: AbortSignal, format?: ImageDownloadChoice, content?: string) {
+  checkCreationDownload(task, version, signal)
+  const url = task.urls[index]
+  if (!url && task.kind !== 'text') throw new Error('生成文件暂时无法读取，任务记录已保留。')
+  const image = url && task.kind === 'image' ? await readCreationImage(url, signal) : undefined
+  const response = url && !image ? await fetch(await readableMedia(url, task.kind), { credentials: 'same-origin', signal }) : undefined
+  if (response && !response.ok) throw new Error('结果下载失败，请稍后重试。')
+  const blob = image || (response ? await response.blob() : new Blob([content ?? task.text], { type: 'text/markdown' }))
+  checkCreationDownload(task, version, signal)
+  if (task.kind === 'video' && (!blob.size || /^(text\/|application\/json)/i.test(blob.type))) throw new Error('视频文件无效，请重新加载。')
+  if (image && url) {
+    if (await cacheDownloadedImage(task, index, url, image) !== url) await persist()
+    checkCreationDownload(task, version, signal)
+  }
+  const exported = task.kind === 'image' && format ? await imageDownload(blob, format, signal) : blob
+  checkCreationDownload(task, version, signal)
+  return exported
+}
+export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal, content?: string, format?: ImageDownloadChoice) {
   task = creation.tasks.find(current => current.id === task.id && current.owner === task.owner) || task
   const version = epoch
+  checkCreationDownload(task, version, signal)
   let url = task.urls[index]
   if (task.kind === 'image' && url && !format) {
     format = await chooseImageDownloadFormat(signal, () => version === epoch && (task.urls[index] === url || task.urls[index] === taskAssetUrl(task.id, index)))
     if (!format) return
     url = task.urls[index]
   }
-  let image: Blob | undefined
-  try { image = url && task.kind === 'image' ? await readCreationImage(url, signal) : undefined }
+  let blob: Blob
+  try { blob = await creationDownloadBlob(task, index, version, signal, format, content) }
   catch (cause) {
-    if (!url || format !== 'original' || (cause as { status?: number }).status !== 0) throw cause
-    signal?.throwIfAborted()
+    if (!url || task.kind !== 'image' || format !== 'original' || (cause as { status?: number }).status !== 0) throw cause
+    checkCreationDownload(task, version, signal)
     const source = await readableMedia(url, 'image'), direct = new URL(source, location.href)
-    signal?.throwIfAborted()
-    if (version !== epoch) throw new Error('账号已切换，请重新操作。')
+    checkCreationDownload(task, version, signal)
     if (direct.origin !== location.origin || direct.pathname !== '/api/creation/media') throw cause
-    const link = document.createElement('a')
-    link.href = direct.href; link.download = `creation-${task.id}-${index + 1}`
-    document.body.appendChild(link)
-    try { link.click() } finally { link.remove() }
+    downloadLink(direct.href, `creation-${task.id}-${index + 1}`)
     return
   }
-  const response = url && !image ? await fetch(await readableMedia(url, task.kind), { credentials: 'same-origin', signal }) : undefined
-  if (response && !response.ok) throw new Error('结果下载失败，请稍后重试。')
-  const blob = image || (response ? await response.blob() : new Blob([content ?? task.text], { type: 'text/markdown' }))
-  signal?.throwIfAborted()
-  if (version !== epoch) throw new Error('账号已切换，请重新操作。')
-  if (url && await cacheDownloadedImage(task, index, url, blob) !== url) await persist()
-  const exported = task.kind === 'image' && format ? await imageDownload(blob, format, signal) : blob
-  signal?.throwIfAborted()
-  if (version !== epoch) throw new Error('账号已切换，请重新操作。')
-  requestDownload(exported, task, index)
+  checkCreationDownload(task, version, signal)
+  requestDownload(blob, creationFilename(blob, task, index))
+}
+export async function downloadCreationSelection(items: { task: CreationTask; index: number }[], signal: AbortSignal, format?: ImageDownloadChoice, onProgress?: (finished: number) => void) {
+  const first = items[0]
+  if (!first) throw new Error('所选记录没有可下载的已完成结果。')
+  const version = epoch
+  checkCreationDownload(first.task, version, signal)
+  if (items.length === 1) {
+    await downloadCreation(canonicalCreationTask(first.task), first.index, signal, undefined, format)
+    onProgress?.(1)
+    return
+  }
+  const { downloadZip } = await import('client-zip')
+  let fileError: Error | undefined
+  async function* files() {
+    for (const [position, item] of items.entries()) {
+      try {
+        checkCreationDownload(item.task, version, signal)
+        const task = canonicalCreationTask(item.task)
+        const input = await creationDownloadBlob(task, item.index, version, signal, format ?? 'original')
+        const ordinal = String(position + 1).padStart(String(items.length).length, '0')
+        const filename = creationFilename(input, task, item.index).replace(/[^A-Za-z0-9._-]/g, '_')
+        yield { name: `${ordinal}-${filename}`, input }
+        onProgress?.(position + 1)
+      } catch (cause) {
+        signal.throwIfAborted()
+        fileError = new Error(`第 ${position + 1} 项导出失败：${errorMessage(cause)}`, { cause })
+        throw fileError
+      }
+    }
+  }
+  // Browsers may replace the source stream's error with a generic "Failed to fetch".
+  const archive = await downloadZip(files()).blob().catch(cause => { signal.throwIfAborted(); throw fileError ?? cause })
+  checkCreationDownload(first.task, version, signal)
+  requestDownload(archive, `作品库-${items.length}项.zip`)
 }
 const moderationChecks = new Map<string, { controller: AbortController; content: string; promise: Promise<CreationModeration> }>()
 export async function moderateCreation(task: CreationTask, retry = false, content = task.text): Promise<CreationModeration> {

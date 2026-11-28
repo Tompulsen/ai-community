@@ -88,7 +88,7 @@ test('gallery reads cursor pages without duplicate timestamps and combines model
   await expect(library.locator('.gallery-item')).toHaveCount(45)
   await library.getByRole('searchbox', { name: '搜索生成记录', exact: true }).fill('作品 01')
   await expect(library.locator('.gallery-item')).toHaveCount(5)
-  await library.getByRole('button', { name: '批量选择', exact: true }).click()
+  await library.getByRole('button', { name: '批量操作', exact: true }).click()
   await library.getByRole('checkbox', { name: '选择 作品 018', exact: true }).check()
   await library.getByRole('searchbox', { name: '搜索生成记录', exact: true }).fill('不存在的作品')
   await expect(library.locator('.gallery-item')).toHaveCount(0)

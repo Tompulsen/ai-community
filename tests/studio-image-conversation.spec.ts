@@ -1,4 +1,5 @@
 import { confirmImageDownload } from './helpers/image-download'
+import { readDownloadArchive } from './helpers/download-archive'
 import { expect, test, type Page } from '@playwright/test'
 import { readFile, mkdir } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
@@ -237,17 +238,20 @@ for (const model of ['gpt-image-2', 'gemini-3-pro-image-preview']) test(`pinning
 })
 
 test('one download action saves every image in a group without adding duplicate tools', async ({ page }) => {
-  await fixture(page)
-  await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/first.png' }, { url: 'https://media.example/second.png' }], tokenId: 41, protocol: 'sync' } }))
+  const { image } = await fixture(page)
+  const second = Buffer.from(await page.evaluate(() => document.createElement('canvas').toDataURL('image/png').split(',')[1]!), 'base64')
+  await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/first.jpg' }, { url: `data:image/png;base64,${second.toString('base64')}` }], tokenId: 41, protocol: 'sync' } }))
   await send(page, '生成一组图片', 1)
   const toolbar = page.getByRole('group', { name: '生成结果操作', exact: true }), downloads: string[] = []
   page.on('download', download => downloads.push(download.suggestedFilename()))
   await expect(toolbar.getByRole('button')).toHaveCount(9)
+  const pending = page.waitForEvent('download')
   await toolbar.getByRole('button', { name: '下载图片', exact: true }).click()
   await confirmImageDownload(page)
-  await expect.poll(() => downloads.length).toBe(2)
-  expect(new Set(downloads).size).toBe(2)
-  expect(downloads.every(name => name.endsWith('.jpg'))).toBe(true)
+  const archive = await readDownloadArchive(await pending)
+  expect(downloads).toEqual([expect.stringMatching(/\.zip$/)])
+  expect([...archive.keys()]).toEqual([expect.stringMatching(/-1\.jpg$/), expect.stringMatching(/-2\.png$/)])
+  expect([...archive.values()]).toEqual([image, second])
 })
 
 test('touch users can read unavailable action hints without publishing', async ({ browser }) => {
