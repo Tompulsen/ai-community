@@ -135,9 +135,37 @@ test('partial updates preserve unloaded tasks, other-tab edits, deletions and sh
   expect(result.sharedBytes).toBeGreaterThan(0)
 })
 
+test('an empty first snapshot initializes history and later unchanged saves need no write transaction', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const missing = await store.readTaskSnapshot('18')
+    await store.saveTaskSnapshot('18', [])
+    const initialized = await store.readTaskSnapshot('18')
+    const transaction = IDBDatabase.prototype.transaction
+    let writes = 0
+    IDBDatabase.prototype.transaction = function (...args) {
+      if (this.name === 'community-studio-media' && args[1] === 'readwrite') writes++
+      return Reflect.apply(transaction, this, args)
+    }
+    try {
+      await store.saveTaskChanges('18', new Map())
+      await store.saveTaskSnapshot('18', [])
+      return { missing: missing === undefined, initialized, writes }
+    } finally { IDBDatabase.prototype.transaction = transaction }
+  })
+  expect(result).toEqual({ missing: true, initialized: [], writes: 0 })
+  await page.reload()
+  expect(await page.evaluate(async () => (await import('/src/studio-task-store.ts')).readTaskSnapshot('18'))).toEqual([])
+})
+
 async function lobby(page: Page) {
-  await page.goto('/create/image')
-  await expect.poll(() => page.evaluate(async () => (await import('/src/native-studio.ts')).creation.loaded)).toBe(true)
+  await page.goto('/discover')
+  await initializeTestStudio(page)
+}
+async function initializeTestStudio(page: Page) {
+  await expect.poll(() => page.evaluate(async () => (await import('/src/state.ts')).session.user?.id)).toBe('17')
+  await page.evaluate(async () => (await import('/src/native-studio.ts')).initializeCreation())
 }
 
 test('actual submission stores references once, sends original bytes, and reloads without Base64 history', async ({ page }) => {
@@ -162,7 +190,7 @@ test('actual submission stores references once, sends original bytes, and reload
   expect(requests).toHaveLength(1)
   expect(requests[0].referenceUrls).toEqual(['data:image/jpeg;base64,' + image.toString('base64')])
   await page.reload()
-  await expect.poll(() => page.evaluate(async () => (await import('/src/native-studio.ts')).creation.loaded)).toBe(true)
+  await initializeTestStudio(page)
   expect(await page.evaluate(async id => {
     const task = (await import('/src/native-studio.ts')).creation.tasks.find(task => task.id === id)!
     return { phase: task.phase, references: task.references, inline: JSON.stringify(task).includes('data:image/') }

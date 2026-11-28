@@ -190,6 +190,18 @@ test('a blocked local original shows retry and loads after another tab releases 
   const { state } = await fixture(page)
   await send(page)
   await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
+  await expect.poll(() => page.locator('.creation-image-preview img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
+  // Force an original read rather than the optional display cache on the next visit.
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('community-studio-media')
+    open.onerror = () => reject(open.error)
+    open.onsuccess = () => {
+      const tx = open.result.transaction('previews', 'readwrite')
+      tx.objectStore('previews').clear()
+      tx.oncomplete = () => { open.result.close(); resolve() }
+      tx.onabort = () => { open.result.close(); reject(tx.error) }
+    }
+  }))
   const blocker = await context.newPage()
   await blocker.goto('/assets/brand/octopus-community.jpg')
   await blocker.evaluate(() => new Promise<void>((resolve, reject) => {

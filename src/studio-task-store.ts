@@ -320,6 +320,8 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
     const removed = options.removeMissing === false ? [] : [...previous.keys()].filter(id => !values.has(id))
     const changed = [...values].filter(([id, value]) => previous.get(id) !== value || loadedForUpdate.get(owner)?.has(id))
     const db = await database()
+    // Do not block history restoration on a needless write behind another tab's media transaction.
+    if (!removed.length && !changed.length && (await read<TaskMetadata>(db.transaction('meta').objectStore('meta'), owner))?.initialized) return
     const prepared: Awaited<ReturnType<typeof prepareTask>>[] = []
     for (const [id, raw] of changed) {
       const item = await prepareTask(owner, raw, db, loadedForUpdate.get(owner)?.get(id) ?? previous.get(id), mediaIdentities.get(owner)?.get(id))

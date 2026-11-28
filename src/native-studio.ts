@@ -1053,6 +1053,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
   portable.clear()
   input.references = compactImageContext ? [...storedByRequest.values()] : storedReferences
+  storedByRequest.clear()
   input.imageContext = undefined
   const previous = input.conversationId && creation.tasks.find(task => task.owner === owner && task.kind === input.kind && creationConversationId(task) === input.conversationId)
   const task: CreationTask = reactive({
