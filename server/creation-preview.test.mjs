@@ -18,28 +18,28 @@ test('previews rotate orientation, preserve small dimensions and reject broken o
     await assert.rejects(imagePreview(source, async () => response(bytes), new AbortController().signal), { statusCode: 502 })
 })
 
-test('preview work is bounded to two active and sixteen total jobs, and canceled queued work never fetches', async () => {
+test('preview work is bounded to four active and fourteen queued jobs, and canceled queued work never fetches', async () => {
   let active = 0, peak = 0, calls = 0
-  const release = []
+  const gate = Promise.withResolvers()
   const fetcher = async () => {
     calls++; active++; peak = Math.max(peak, active)
-    await new Promise(resolve => release.push(resolve))
+    await gate.promise
     active--
     return response(png)
   }
-  const controllers = Array.from({ length: 16 }, () => new AbortController())
+  const controllers = Array.from({ length: 19 }, () => new AbortController())
   const jobs = controllers.map(controller => imagePreview(source, fetcher, controller.signal))
   const settled = Promise.allSettled(jobs)
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(calls, 2)
-  await assert.rejects(imagePreview(source, fetcher, new AbortController().signal), { statusCode: 503 })
-  for (const controller of controllers.slice(2)) controller.abort()
-  for (const finish of release) finish()
+  for (const controller of controllers.slice(4)) controller.abort()
+  gate.resolve()
   const results = await settled
-  assert.equal(results.filter(result => result.status === 'fulfilled').length, 2)
-  assert(results.slice(2).every(result => result.status === 'rejected' && result.reason.statusCode === 504))
-  assert.equal(calls, 2)
-  assert.equal(peak, 2)
+  assert(results.slice(0, 4).every(result => result.status === 'fulfilled'))
+  assert(results.slice(4, 18).every(result => result.status === 'rejected' && result.reason.statusCode === 504))
+  assert.equal(results[18].status, 'rejected')
+  assert.equal(results[18].reason.statusCode, 503)
+  assert.equal(calls, 4)
+  assert.equal(peak, 4)
   assert.equal((await imagePreview(source, async () => response(png), new AbortController().signal)).status, 200)
 })
 
@@ -50,13 +50,12 @@ test('preview deadline includes queue time and aborts the active downloader befo
     calls++
     return new Promise((_resolve, reject) => signal.addEventListener('abort', () => { canceled++; reject(signal.reason) }, { once: true }))
   }
-  const jobs = Array.from({ length: 3 }, () => imagePreview(source, fetcher, new AbortController().signal))
+  const jobs = Array.from({ length: 5 }, () => imagePreview(source, fetcher, new AbortController().signal))
   const settled = Promise.allSettled(jobs)
   await Promise.resolve()
-  assert.equal(calls, 2)
   t.mock.timers.tick(65000)
   const results = await settled
   assert(results.every(result => result.status === 'rejected' && result.reason.statusCode === 504))
-  assert.equal(calls, 2)
-  assert.equal(canceled, 2)
+  assert.equal(calls, 4)
+  assert.equal(canceled, 4)
 })
