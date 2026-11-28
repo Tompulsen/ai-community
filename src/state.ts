@@ -7,6 +7,7 @@ export const session = reactive({
   user: null as SessionUser | null,
   ready: false,
   loading: false,
+  restoring: false,
   error: '',
   csrfToken: '',
   accountUrl: '',
@@ -46,7 +47,13 @@ export async function api<T>(path: string, options: {
   onUploadProgress?: (percent: number) => void
 } = {}): Promise<T> {
   if (!path.startsWith('/api/')) throw new Error('无效的接口地址。')
-  const version = sessionVersion, owner = session.user?.id
+  const version = sessionVersion, userId = session.user?.id, accountId = session.user?.accountId
+  if (session.restoring && options.method && options.method !== 'GET' && path !== '/api/account/session') {
+    // Dialogs outside the page must also wait until the account is confirmed.
+    await sessionRequest
+    if (version !== sessionVersion || !session.user || session.user.id !== userId || session.user.accountId !== accountId) throw new Error('账号已切换，请重新操作。')
+  }
+  const owner = session.user
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (options.expectedAccount) headers['X-New-Api-User'] = options.expectedAccount
   const body = options.body === undefined && options.method && options.method !== 'GET' ? {} : options.body
@@ -73,7 +80,7 @@ export async function api<T>(path: string, options: {
   if (!response.ok) {
     const payload = result as { message?: string; code?: string; error?: string | { message?: string; code?: string } } | null
     const code = typeof payload?.error === 'object' ? payload.error?.code || payload.code : payload?.code
-    if (version === sessionVersion && owner === session.user?.id && response.status === 401 && (!code || code === 'AUTH_REQUIRED' || code === 'INVALID_CREDENTIALS')) session.user = null
+    if (version === sessionVersion && owner === session.user && !session.restoring && response.status === 401 && (!code || code === 'AUTH_REQUIRED' || code === 'INVALID_CREDENTIALS')) session.user = null
     const detail = typeof payload?.error === 'string' ? payload.error : payload?.error?.message
     throw Object.assign(new Error(detail || payload?.message || (response.status === 401 ? '请先登录。' : `请求失败（${response.status}）。`)), { code, status: response.status, retryAfter: response.headers.get('Retry-After') })
   }
@@ -191,6 +198,7 @@ export async function syncAccountSession(returnTo?: string, signal?: AbortSignal
 function invalidateSessionRead() {
   sessionVersion++
   session.loading = false
+  session.restoring = false
   sessionController?.abort()
   sessionController = undefined
   sessionRequest = undefined
@@ -206,14 +214,17 @@ export async function loadSession(force = false) {
   sessionController = controller
   sessionRequest = (async () => {
     session.error = ''
+    let missingSession = false
     try {
       type SessionResult = { user: SessionUser | null; csrfToken?: string; authentication?: string; accountUrl?: string }
       let result = await api<SessionResult>('/api/session', { signal: controller.signal })
       if (version !== sessionVersion) return
       session.csrfToken = result.csrfToken || ''
       session.accountUrl = result.accountUrl || session.accountUrl
-      if (!result.user) session.user = null
+      missingSession = !result.user
       if (!result.user && result.authentication === 'zhangyu') {
+        // Commit the final identity once so renewal does not remount the current page.
+        session.restoring = Boolean(session.user)
         try {
           await syncAccountSession(undefined, controller.signal)
           if (version !== sessionVersion) return
@@ -228,13 +239,14 @@ export async function loadSession(force = false) {
       session.csrfToken = result.csrfToken || ''
     } catch (error) {
       if (version !== sessionVersion) return
-      if ((error as { status?: number }).status === 401) session.user = null
+      if (missingSession || (error as { status?: number }).status === 401) session.user = null
       session.error = errorMessage(controller.signal.aborted ? controller.signal.reason : error)
     } finally {
       clearTimeout(timeout)
       if (version === sessionVersion) {
         session.ready = true
         session.loading = false
+        session.restoring = false
         sessionRequest = undefined
         sessionController = undefined
       }

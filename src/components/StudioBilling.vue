@@ -39,9 +39,11 @@ function billingLabel(row: ModelPriceRow) {
 }
 function showPrices() { menu.value?.close(); emit('prices') }
 let version = 0
-async function load() {
+async function load(background = false) {
+  if (background && loading.value) return
   const current = ++version, owner = session.user?.id, account = session.user?.accountId || owner
-  prices.value = undefined; error.value = ''
+  if (!background) prices.value = undefined
+  error.value = ''
   if (!owner) { loading.value = false; return }
   loading.value = true
   void refreshAccountBalance()
@@ -51,13 +53,13 @@ async function load() {
     if (!Array.isArray(result?.rows) || result.userId !== Number(account)) throw new Error('Invalid pricing account')
     prices.value = result
   } catch {
-    if (version === current) error.value = '价格读取失败，请重试。'
+    if (version === current) { prices.value = undefined; error.value = '价格读取失败，请重试。' }
   } finally {
     if (version === current) loading.value = false
   }
 }
-function refreshVisible() { if (document.visibilityState === 'visible') void load() }
-watch(() => [session.user?.id, session.user?.accountId, billingGroup.value], () => { void load() }, { immediate: true, flush: 'sync' })
+function refreshVisible() { if (document.visibilityState === 'visible' && !session.restoring) void load(true) }
+watch([() => session.user?.id, () => session.user?.accountId, billingGroup], () => { void load() }, { immediate: true, flush: 'sync' })
 watch(() => props.refreshKey, (value, previous) => { if (value && value !== previous) void load() })
 onMounted(() => window.addEventListener('focus', refreshVisible))
 onBeforeUnmount(() => { version++; window.removeEventListener('focus', refreshVisible) })
@@ -95,7 +97,7 @@ onBeforeUnmount(() => { version++; window.removeEventListener('focus', refreshVi
           <p v-if="billsReferenceVideo && !referenceDurationKnown" class="billing-note" role="status">参考视频时长待服务器确认，暂不预估总额。</p>
         </template>
         <p v-if="accountBalance.error" class="billing-error" role="alert">积分读取失败，请重试。</p>
-        <div class="billing-detail-actions"><button type="button" class="studio-tool billing-refresh" :disabled="loading || accountBalance.loading" @click="load"><RefreshCw :size="15" aria-hidden="true" />{{ error || accountBalance.error ? '重试' : '刷新积分与价格' }}</button><button v-if="!hideCatalog" type="button" class="studio-tool" @click="showPrices">查看全部定价</button></div>
+        <div class="billing-detail-actions"><button type="button" class="studio-tool billing-refresh" :disabled="loading || accountBalance.loading" @click="load()"><RefreshCw :size="15" aria-hidden="true" />{{ error || accountBalance.error ? '重试' : '刷新积分与价格' }}</button><button v-if="!hideCatalog" type="button" class="studio-tool" @click="showPrices">查看全部定价</button></div>
       </div>
     </StudioPopover><slot /></div>
   </div>

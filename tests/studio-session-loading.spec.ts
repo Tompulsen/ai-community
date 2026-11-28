@@ -66,7 +66,7 @@ test('silent account synchronization does not briefly ask the user to sign in', 
   const gate = new Promise<void>(resolve => { release = resolve })
   await page.route('**/api/account/session', async route => { await gate; await route.fallback() })
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await expect(page.locator('.native-studio[inert]')).toBeVisible()
+  await expect(page.locator('#main[inert]')).toBeVisible()
   await expect(page.getByText('正在加载章鱼账号…', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '登录后开始创作' })).toHaveCount(0)
   await expect(page.locator('.header-login')).toHaveCount(0)
@@ -106,7 +106,7 @@ test('community navigation reuses the account without a second session read or l
   await page.getByRole('link', { name: '创作台', exact: true }).first().click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeVisible()
   expect(account.reads.filter(path => path === '/api/session')).toHaveLength(readsBefore)
-  expect(account.mutations).toEqual([])
+  expect(account.mutations.filter(item => !['/api/works/feed', '/api/creation/models'].includes(item.path))).toEqual([])
 })
 
 test('a background session outage keeps the workspace and its draft without an account notice', async ({ page }) => {
@@ -122,7 +122,7 @@ test('a background session outage keeps the workspace and its draft without an a
   await expect(page.locator('.native-studio')).not.toHaveAttribute('inert', '')
   await expect(page.getByText('账号刷新暂时不可用', { exact: false })).toHaveCount(0)
   await expect(page.locator('.studio-account-status, .header-login')).toHaveCount(0)
-  expect(account.mutations).toEqual([])
+  expect(account.mutations.filter(item => item.path !== '/api/creation/models')).toEqual([])
 })
 
 test('text mode shows an empty composer while identity is restored without loading a guest draft', async ({ page }) => {

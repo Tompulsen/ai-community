@@ -128,6 +128,98 @@ describe('real API state', () => {
     await loadSession(true)
     expect(session.user).toBeNull()
   })
+  it('commits a restored account once without briefly switching the page to a guest', async () => {
+    const { watch } = await import('vue')
+    const { session, loadSession } = await import('./state')
+    session.user = { ...user }
+    session.ready = true
+    const identities: (string | undefined)[] = []
+    const stop = watch(() => session.user?.id, value => identities.push(value), { flush: 'sync' })
+    fetchMock.mockResolvedValueOnce(response({ user: null, authentication: 'zhangyu' }))
+      .mockResolvedValueOnce(response({ user }))
+      .mockResolvedValueOnce(response({ user }))
+    await loadSession(true)
+    stop()
+    expect(session.user).toEqual(user)
+    expect(identities).toEqual([])
+    expect(session.loading).toBe(false)
+  })
+  it('rejects an old request without letting its late 401 overwrite a newly confirmed session', async () => {
+    const { session, api, loadSession } = await import('./state')
+    session.user = { ...user }
+    let finish!: (value: Response) => void
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve }))
+      .mockResolvedValueOnce(response({ user }))
+    const stale = api('/api/account')
+    const failure = expect(stale).rejects.toMatchObject({ status: 401 })
+    await loadSession(true)
+    finish(response({ message: 'Session expired', code: 'AUTH_REQUIRED' }, 401))
+    await failure
+    expect(session.user).toEqual(user)
+    fetchMock.mockResolvedValueOnce(response({ message: 'Session expired', code: 'AUTH_REQUIRED' }, 401))
+    await expect(api('/api/account')).rejects.toMatchObject({ status: 401 })
+    expect(session.user).toBeNull()
+  })
+  it('lets the active renewal settle identity when an older request returns 401 during synchronization', async () => {
+    const { session, api, loadSession } = await import('./state')
+    session.user = { ...user }
+    let failOld!: (value: Response) => void, finishSync!: (value: Response) => void
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { failOld = resolve }))
+      .mockResolvedValueOnce(response({ user: null, authentication: 'zhangyu' }))
+      .mockImplementationOnce(() => new Promise<Response>(resolve => { finishSync = resolve }))
+      .mockResolvedValueOnce(response({ user }))
+    const stale = api('/api/account')
+    const failure = expect(stale).rejects.toMatchObject({ status: 401 })
+    const pending = loadSession(true)
+    await vi.waitFor(() => expect(session.restoring).toBe(true))
+    failOld(response({ message: 'Expired', code: 'AUTH_REQUIRED' }, 401))
+    await failure
+    expect(session.user).toEqual(user)
+    finishSync(response({ user }))
+    await pending
+    expect(session.user).toEqual(user)
+    expect(session.restoring).toBe(false)
+  })
+  it.each(['guest', 'changed', 'timeout'])('finishes renewal safely for %s', async outcome => {
+    const { session, loadSession } = await import('./state')
+    session.user = { ...user }
+    const nextUser = outcome === 'changed' ? { ...user, id: 'newUser2' } : null
+    fetchMock.mockResolvedValueOnce(response({ user: null, authentication: 'zhangyu' }))
+      .mockImplementationOnce((_: string, options: RequestInit) => outcome === 'timeout'
+        ? new Promise<Response>((_, reject) => options.signal!.addEventListener('abort', () => reject(options.signal!.reason), { once: true }))
+        : Promise.resolve(response({ user: nextUser }, outcome === 'guest' ? 401 : 200)))
+      .mockResolvedValueOnce(response({ user: nextUser }))
+    const pending = loadSession(true)
+    await vi.advanceTimersByTimeAsync(outcome === 'timeout' ? 20000 : 0)
+    await pending
+    expect(session.user).toEqual(nextUser)
+    expect(session.restoring).toBe(false)
+    expect(session.loading).toBe(false)
+  })
+  it.each(['same', 'different-user', 'different-account', 'guest'])('waits for renewal before POST requests and checks the final identity: %s', async outcome => {
+    const { session, api, loadSession } = await import('./state')
+    session.user = { ...user, accountId: '17' }
+    const nextUser = outcome === 'guest' ? null : { ...user, accountId: outcome === 'different-account' ? '18' : '17', id: outcome === 'different-user' ? 'newUser2' : user.id }
+    let reads = 0, finishSync!: (value: Response) => void
+    fetchMock.mockImplementation((path: string) => {
+      if (path === '/api/session') return response({ user: reads++ ? nextUser : null, authentication: 'zhangyu', csrfToken: reads > 1 ? 'renewed-csrf' : 'guest-csrf' })
+      if (path === '/api/account/session') return new Promise<Response>(resolve => { finishSync = resolve })
+      return response({ ok: true })
+    })
+    const renewal = loadSession(true)
+    await vi.waitFor(() => expect(session.restoring).toBe(true))
+    const paths = ['/api/notifications/read-all', '/api/works/feed']
+    const pending = paths.map(path => api(path, { method: 'POST', body: {} }).then(() => 'sent', error => error.message))
+    expect(fetchMock.mock.calls.map(call => call[0])).toEqual(['/api/session', '/api/account/session'])
+    finishSync(response({ user: nextUser }))
+    await renewal
+    expect(await Promise.all(pending)).toEqual(outcome === 'same' ? ['sent', 'sent'] : ['账号已切换，请重新操作。', '账号已切换，请重新操作。'])
+    for (const path of paths) {
+      const sent = fetchMock.mock.calls.filter(call => call[0] === path)
+      expect(sent).toHaveLength(outcome === 'same' ? 1 : 0)
+      if (outcome === 'same') expect(sent[0]![1].headers['X-CSRF-Token']).toBe('renewed-csrf')
+    }
+  })
   it('cancels a pending upload-limit request without occupying the upload queue', async () => {
     fetchMock.mockImplementation((_: string, options: RequestInit) => new Promise<Response>((_, reject) => {
       options.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
