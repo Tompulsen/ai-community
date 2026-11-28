@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { defineAsyncComponent, nextTick, ref } from 'vue'
 import { X } from '@lucide/vue'
 import type { InboxCategory } from '../inbox'
-import MessagesView from '../views/MessagesView.vue'
 
+const MessagesView = defineAsyncComponent(() => import('../views/MessagesView.vue'))
 const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLDialogElement>(), category = ref<InboxCategory | null>(null)
 async function open(value: InboxCategory) {
@@ -19,9 +19,14 @@ defineExpose({ open, close })
 <template>
   <Teleport to="body">
     <dialog ref="dialog" class="message-center-dialog" aria-label="消息中心" @close="closed" @click="($event.target === dialog) && close()">
-      <MessagesView v-if="category" embedded :category="category">
-        <template #close><button type="button" class="icon-button" aria-label="关闭消息中心" title="关闭消息中心" @click="close"><X :size="20" /></button></template>
-      </MessagesView>
+      <Suspense v-if="category">
+        <MessagesView embedded :category="category">
+          <template #close><button type="button" class="icon-button" aria-label="关闭消息中心" title="关闭消息中心" @click="close"><X :size="20" /></button></template>
+        </MessagesView>
+        <template #fallback>
+          <div class="page-container"><p role="status">正在加载消息…</p><button type="button" class="button subtle btn" @click="close">关闭消息中心</button></div>
+        </template>
+      </Suspense>
     </dialog>
   </Teleport>
 </template>

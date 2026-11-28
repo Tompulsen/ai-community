@@ -335,9 +335,23 @@ test('session reads expire stale community cookies without minting a replacement
     res: { getHeader: key => headers[key], setHeader: (key, value) => { headers[key] = value } },
     json(status, value) { assert.equal(status, 200); response = value } })
   assert.equal(response.user.id, '7')
+  assert.equal(response.accountSyncRequired, false)
   assert.equal(headers['Set-Cookie'].length, 1)
   assert.match(headers['Set-Cookie'][0], /^community_session=;.*Max-Age=0/)
   assert.notEqual(await readSessionById(opaque), null)
+})
+
+test('session reads flag an unbound native account for synchronization without granting an identity', async t => {
+  t.mock.method(globalThis, 'fetch', async () => envelope())
+  const fixture = authenticationFixture()
+  fixture.mapping.valid = false
+  fixture.req.method = 'GET'
+  const { user } = await fixture.auth.authenticate(fixture.req)
+  assert.equal(user, null)
+  await fixture.auth.handleAuth({ req: fixture.req, url: new URL('/api/session', config.url), user,
+    json(status, value) { assert.equal(status, 200); assert.deepEqual(value, {
+      user: null, authentication: 'zhangyu', accountUrl: 'https://accounts.test', accountSyncRequired: true,
+    }) } })
 })
 
 test('cached native identities stop immediately after native session revocation', async t => {

@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Bell, Gift, Heart, House, LogOut, MessageSquare, Moon, PanelLeftClose, PanelLeftOpen, PanelsTopLeft, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sun, Users, X } from '@lucide/vue'
-import WorkEditor from './components/WorkEditor.vue'
-import BackgroundStudio from './components/BackgroundStudio.vue'
 import CommunityTools from './components/CommunityTools.vue'
 import AccountBalance from './components/AccountBalance.vue'
 import MessageCenterDialog from './components/MessageCenterDialog.vue'
@@ -18,7 +16,12 @@ import { loadSite, site } from './site'
 import { studioSidebarWidth } from './studio-preferences'
 import { appearance, themeState } from './appearance'
 
+const WorkEditor = defineAsyncComponent(() => import('./components/WorkEditor.vue'))
+const BackgroundStudio = defineAsyncComponent(() => import('./components/BackgroundStudio.vue'))
 const route = useRoute(), router = useRouter()
+const publishOpen = computed(() => route.query.publish === '1')
+// Keep the editor's submission key across close and reopen after its first use.
+const editorRequested = computed<boolean>(previous => publishOpen.value || Boolean(previous))
 const guestAccount = computed(() => route.path === '/account' && !session.user)
 const accountSettings = computed(() => route.path === '/account' && !!session.user)
 const accountSettingDetail = computed(() => accountSettings.value && typeof route.query.tab === 'string' && ['privacy', 'following', 'theme', 'security', 'balance'].includes(route.query.tab))
@@ -377,7 +380,7 @@ function restoreMessageTrigger() {
     </div>
     <p v-if="session.error && (!studioPage || !session.user)" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
     <main id="main" tabindex="-1" :inert="session.restoring"><RouterView :key="route.path.startsWith('/account') ? route.path : `${studioPage ? '/create' : route.path}:${session.user?.id || 'guest'}`" /></main>
-    <BackgroundStudio />
+    <BackgroundStudio v-if="session.user" />
     <footer v-if="!guestAccount && !studioPage" class="app-footer"><span>{{ site.brand }}</span><RouterLink to="/messages?tab=announcement">公告</RouterLink></footer>
     <AnnouncementPopup />
     <WelfareReminder />
@@ -390,7 +393,7 @@ function restoreMessageTrigger() {
     </nav>
     <span class="lottery-status" role="status" aria-atomic="true">{{ session.user && lotteryBalance.balance !== null ? `剩余 ${lotteryBalance.balance} 次抽奖机会` : '' }}</span>
     <Transition name="toast"><div v-if="notice" class="toast-message" role="status">{{ notice }}</div></Transition>
-    <WorkEditor :open="route.query.publish === '1'" @close="closePublish" @saved="published" />
+    <WorkEditor v-if="editorRequested" :open="publishOpen" @close="closePublish" @saved="published" />
     <MessageCenterDialog v-if="session.user" ref="messageCenter" @close="restoreMessageTrigger" />
   </div>
 </template>

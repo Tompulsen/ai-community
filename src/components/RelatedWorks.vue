@@ -7,21 +7,22 @@ import { api } from '../state'
 import BentoGrid from './BentoGrid.vue'
 import WorkCard from './WorkCard.vue'
 
-const props = defineProps<{ work: Work }>()
+const props = defineProps<{ work: Work; enabled: boolean }>()
 const tags = computed(() => [...new Set(props.work.tags)])
 const items = ref<WorkSummary[]>([]), nextCursor = ref<string | null>(null)
 const loading = ref(false), failed = ref(false)
 const content = ref<HTMLElement>(), moreButton = ref<HTMLButtonElement>()
+let started = false
 let controller: AbortController | undefined
 
 async function loadMore() {
   if (loading.value || !tags.value.length || !controller) return
   if (document.activeElement === moreButton.value) content.value?.focus({ preventScroll: true })
   const active = controller, selected = props.work, cursor = nextCursor.value
-  const params = new URLSearchParams({ kind: selected.kind, sort: 'latest', limit: '20', view: 'card' })
+  const params = new URLSearchParams({ kind: selected.kind, sort: 'latest', limit: cursor ? '20' : '8', view: 'card' })
   for (const tag of tags.value) params.append('tag', tag)
   if (cursor) params.set('cursor', cursor)
-  loading.value = true; failed.value = false
+  started = true; loading.value = true; failed.value = false
   try {
     const combined = combineAbortSignals([active.signal, AbortSignal.timeout(15000)])
     const page = await api<{ items: WorkSummary[]; nextCursor?: string | null }>(`/api/works?${params}`, { signal: combined.signal }).finally(combined.dispose)
@@ -38,10 +39,13 @@ async function loadMore() {
 }
 
 watch(() => [props.work.id, props.work.kind, ...tags.value], () => {
-  controller?.abort(); controller = new AbortController()
+  controller?.abort(); controller = new AbortController(); started = false
   items.value = []; nextCursor.value = null; loading.value = false; failed.value = false
-  void loadMore()
+  if (props.enabled) void loadMore()
 }, { immediate: true })
+watch(() => props.enabled, enabled => {
+  if (enabled && !started) void loadMore()
+})
 onBeforeUnmount(() => { controller?.abort(); controller = undefined })
 </script>
 

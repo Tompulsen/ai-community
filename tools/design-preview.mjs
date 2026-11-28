@@ -92,7 +92,7 @@ export function createPreviewMiddleware() {
         }
       }
       if (path === '/api/session' && read) return reply({ user: authenticated ? user : null,
-        csrfToken: 'local-ui-preview', authentication: 'zhangyu', accountUrl: '' })
+        csrfToken: 'local-ui-preview', authentication: 'zhangyu', accountUrl: '', accountSyncRequired: false })
       if (path === '/api/new-api/status' && read) return reply(success({
         enabled: true, configured: true, publicUrl: '', passwordLoginEnabled: true, turnstileSiteKey: '',
         registerEnabled: true, passwordRegisterEnabled: true, emailVerificationEnabled: true,

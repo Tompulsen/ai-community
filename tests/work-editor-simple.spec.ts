@@ -234,6 +234,7 @@ test('explicit video publication selects its files and parameters', async ({ pag
   await form.getByLabel('作品标题', { exact: true }).fill('视频作品')
   await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
   await form.getByRole('button', { name: /^(检查并公开|提交技能审核)$/ }).click()
+  await expect(form).not.toBeVisible()
   expect(state.writes[0]).toMatchObject({ kind: 'video', tags: ['摄影'], status: 'pending', parameters: { kind: 'video', duration: 8.001, videoOptions: { resolution: '1080p', customParameters: '{"fps":23.976}' } } })
 })
 

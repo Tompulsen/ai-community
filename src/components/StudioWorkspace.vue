@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import { ArrowUp, Eraser, LoaderCircle, Pencil, Plus, SlidersHorizontal, Square, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
 import { errorMessage, notify, session } from '../state'
@@ -17,7 +17,6 @@ import { resolveMediaSkills, resolveRemixSkills, setSelectedSkillIds } from '../
 import StudioBilling from './StudioBilling.vue'
 import StudioModelPicker from './StudioModelPicker.vue'
 import StudioVideoPrompt from './StudioVideoPrompt.vue'
-import StudioReferenceAttachments from './StudioReferenceAttachments.vue'
 import StudioMaterialStatus from './studio-message/StudioMaterialStatus.vue'
 import { useStudioMaterials, type StudioFile } from '../use-studio-materials'
 import { remapVideoMentions } from '../../shared/studio/video-mentions'
@@ -36,6 +35,7 @@ import type { StudioEntry } from '../studio-entry'
 import { canvasRequestIssue, isCanvasEditPrompt, type CanvasEditDraft } from '../image-canvas'
 import type { CanvasSubmitOptions } from '../studio-canvas'
 
+const StudioReferenceAttachments = defineAsyncComponent(() => import('./StudioReferenceAttachments.vue'))
 const props = defineProps<{ kind: 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean; entryOnly?: boolean; entryPending?: boolean }>()
 const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string]; remixError: [message: string]; model: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string] }>()
 const model = ref(''), prompt = ref(''), ratio = ref('auto'), count = ref(1), duration = ref(8)
@@ -602,7 +602,7 @@ defineExpose({ submitCanvas: (draft: CanvasEditDraft, options: CanvasSubmitOptio
     <p v-if="creation.modelLaunchPending" class="muted" role="status">正在准备所选模型，请稍候…</p>
     <form class="creation-controls studio-composer" :aria-label="entryOnly ? '快捷创作' : '创作参数'" :inert="!composerReady || Boolean(creation.modelLaunchPending) || undefined" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
       <div v-if="branchTaskId || imageEditTaskId" class="creation-editing" role="status"><Pencil :size="14" aria-hidden="true" /><span>{{ imageEditTaskId ? '编辑图片 · 修改提示词后生成新图片' : editing ? kind === 'image' ? '修改提示词 · 发送后追加新图片' : '编辑原提问 · 生成后保留旧版本' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" aria-hidden="true" /></button></div>
-      <StudioReferenceAttachments :references="references" :compact="kind === 'video'" :source-video="sourceVideoOperation" @remove="removeReference" @duration="sourceDuration" />
+      <StudioReferenceAttachments v-if="references.length" :references="references" :compact="kind === 'video'" :source-video="sourceVideoOperation" @remove="removeReference" @duration="sourceDuration" />
       <StudioMaterialStatus :items="materialIssues" @remove="materials.remove" @retry="retryMaterials" @cancel="materials.cancel" />
       <label class="field prompt-field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '提示词' }}</span><StudioVideoPrompt v-if="kind === 'video' && !sourceVideoOperation" ref="promptInput" v-model="prompt" :label="entryOnly ? '创作描述' : '提示词'" :references="imageReferences" :disabled="!composerReady" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" :disabled="!composerReady" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="sourceVideoOperation ? '视频处理说明（可选）' : entryOnly ? '描述你想生成的图片…' : '发消息，描述你的想法…'" :required="!sourceVideoOperation" @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
       <div class="studio-composer-tools">

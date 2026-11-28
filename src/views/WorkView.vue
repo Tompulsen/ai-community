@@ -19,7 +19,8 @@ async function closeRemix() { remixOpen.value = false; await nextTick(); remixBu
 
 const mobile = inject<Ref<boolean>>('mobile-community', ref(false))
 const mediaBrowser = ref<InstanceType<typeof WorkMedia>>()
-function openRelated() { mediaBrowser.value?.pause(); relatedDialog.value?.showModal() }
+const relatedRequested = ref(false)
+function openRelated() { relatedRequested.value = true; mediaBrowser.value?.pause(); relatedDialog.value?.showModal() }
 const commentsDialog = ref<HTMLDialogElement>(), relatedDialog = ref<HTMLDialogElement>()
 watch(mobile, () => { commentsDialog.value?.close(); relatedDialog.value?.close() })
 const route = useRoute()
@@ -73,7 +74,7 @@ async function load() {
   clearInterval(interestTimer)
   const owner = session.user?.id || 'guest'
   const active = new AbortController(); controller = active
-  commentsDialog.value?.close(); relatedDialog.value?.close(); remixOpen.value = false
+  commentsDialog.value?.close(); relatedDialog.value?.close(); relatedRequested.value = false; remixOpen.value = false
   loading.value = true; error.value = ''; work.value = null; comments.value = []; commentsCursor.value = null
   composer.reset(); promptExpanded.value = false
   try {
@@ -167,7 +168,7 @@ async function share() {
     <WorkRemixDialog v-if="remixOpen" :key="work.id" :source="work" @close="closeRemix" />
     <header v-if="!mobile" class="detail-toolbar"><RouterLink to="/discover" class="detail-return"><ArrowLeft :size="20" aria-hidden="true" /><span>返回发现</span></RouterLink><div class="detail-context"><span>{{ skill ? '技能' : kindLabels[work.kind] }}作品</span><span v-if="work.viewsCount !== undefined"><Eye :size="16" aria-hidden="true" />{{ work.viewsCount.toLocaleString('zh-CN') }} 次浏览</span></div></header>
     <div class="detail-layout">
-      <Teleport to="#mobile-related-content" :disabled="!mobile" defer><RelatedWorks :key="work.id" :work="work" /></Teleport>
+      <Teleport to="#mobile-related-content" :disabled="!mobile" defer><RelatedWorks :key="work.id" :work="work" :enabled="!mobile || relatedRequested" /></Teleport>
       <article class="detail-focus" :key="work.id" aria-label="作品详情">
         <div class="detail-visual-column">
           <WorkMedia ref="mediaBrowser" :mobile="mobile" class="detail-visual" :files="displayFiles" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource' && !skill">

@@ -1,5 +1,6 @@
 // Cursor and thumbnail storage adapted from octopus_chat app/store/gallery.ts (MIT).
 import type { CreationTask } from './native-studio'
+import { waitForToolResult } from '../shared/studio/tool-result'
 
 const databaseName = 'community-studio-media'
 const initialized = new Map<string, Map<string, string>>()
@@ -397,20 +398,36 @@ export async function getTaskPage(owner: string, options: TaskPageQuery = {}) {
   const summary = options.summary === false ? { total: 0, mediaCount: 0, models: [] } : await getTaskSummary(owner, options)
   return { tasks, ...(more && last ? { after: { createdAt: last.createdAt, id: last.id } } : {}), ...summary }
 }
+// A read can queue behind a write transaction held by another tab even after the database opens.
+async function readLocalMedia<T>(stores: string | string[], select: (transaction: IDBTransaction) => Promise<T>): Promise<T> {
+  const deadline = AbortSignal.timeout(60000)
+  let transaction: IDBTransaction | undefined
+  const cancel = () => transaction?.abort()
+  deadline.addEventListener('abort', cancel, { once: true })
+  try {
+    const db = await waitForToolResult(database(), deadline)
+    deadline.throwIfAborted()
+    transaction = db.transaction(stores)
+    const [value] = await waitForToolResult(Promise.all([select(transaction), completed(transaction)]), deadline)
+    return value
+  } catch (error) {
+    if (deadline.aborted) throw new Error('浏览器读取本地图片超时，请关闭其它正在使用作品库的页面后重试。')
+    throw error
+  } finally { deadline.removeEventListener('abort', cancel) }
+}
 export async function readTaskAsset(owner: string, url: string, preview = false): Promise<Blob | undefined> {
   checkOwner(owner)
   const key = assetKey(url)
   if (!key) return
-  const db = await database()
   if (preview && key[2] === '0') {
     const thumb = await readTaskPreview(owner, key[1]!, JSON.stringify(['image', url]))
     if (thumb) return thumb.blob
   }
-  const transaction = db.transaction(['originals', 'contents']), done = completed(transaction)
-  const asset = await read<AssetRecord>(transaction.objectStore('originals'), [owner, `${key[1]}:${key[2]}`])
-  const blob = asset?.blob || (asset ? (await read<{ blob: Blob }>(transaction.objectStore('contents'), [owner, asset.identity]))?.blob : undefined)
-  await done
-  return blob && asset?.mime && blob.type !== asset.mime ? blob.slice(0, blob.size, asset.mime) : blob
+  return readLocalMedia(['originals', 'contents'], async transaction => {
+    const asset = await read<AssetRecord>(transaction.objectStore('originals'), [owner, `${key[1]}:${key[2]}`])
+    const blob = asset?.blob || (asset ? (await read<{ blob: Blob }>(transaction.objectStore('contents'), [owner, asset.identity]))?.blob : undefined)
+    return blob && asset?.mime && blob.type !== asset.mime ? blob.slice(0, blob.size, asset.mime) : blob
+  })
 }
 export async function saveTaskOriginal(owner: string, id: string, index: number, source: string, blob: Blob, signal?: AbortSignal): Promise<string | undefined> {
   checkOwner(owner)
@@ -476,7 +493,6 @@ export async function saveTaskPreview(owner: string, id: string, mediaIdentity: 
 }
 export async function readTaskPreview(owner: string, id: string, mediaIdentity: string, index = 0): Promise<{ blob: Blob; duration?: number } | undefined> {
   checkOwner(owner)
-  const db = await database()
-  const value = await read<PreviewRecord>(db.transaction('previews').objectStore('previews'), [owner, index ? `${id}:${index}` : id])
+  const value = await readLocalMedia('previews', transaction => read<PreviewRecord>(transaction.objectStore('previews'), [owner, index ? `${id}:${index}` : id]))
   return value?.identity === mediaIdentity ? { blob: value.blob, ...(value.duration === undefined ? {} : { duration: value.duration }) } : undefined
 }

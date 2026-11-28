@@ -6,9 +6,9 @@ const dimensions = new Map<string, { width: number; height: number }>()
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { LoaderCircle, RotateCw, SquarePen } from '@lucide/vue'
-import { forgetCreationImage, readCreationImage } from '../../native-studio'
+import { forgetCreationImage, mediaSource, readCreationImage } from '../../native-studio'
 
-const props = defineProps<{ src: string; alt: string; label: string; editable?: boolean; thumbnail?: boolean }>()
+const props = defineProps<{ src: string; preview?: string; alt: string; label: string; editable?: boolean; thumbnail?: boolean }>()
 const emit = defineEmits<{ open: []; edit: [] }>()
 const size = ref(dimensions.get(props.src))
 const imageStyle = computed(() => size.value && !props.thumbnail ? {
@@ -17,11 +17,13 @@ const imageStyle = computed(() => size.value && !props.thumbnail ? {
 } : undefined)
 const loaded = ref(false), failed = ref(false), retrying = ref(false), replacement = ref('')
 const element = ref<HTMLElement>(), fallback = ref('')
+const pendingPreview = ref(''), previewReady = ref(false)
 let revision = 0
 let controller: AbortController | undefined, observer: IntersectionObserver | undefined
-function clearImage() {
+function clearImage(keepPreview = false) {
   controller?.abort()
   if (replacement.value) URL.revokeObjectURL(replacement.value)
+  if (!keepPreview) { pendingPreview.value = ''; previewReady.value = false }
   replacement.value = ''; fallback.value = ''; loaded.value = false
 }
 function release() { observer?.disconnect(); clearImage() }
@@ -55,6 +57,19 @@ async function read(retry = false) {
   controller?.abort(); controller = current
   if (/^(?:blob:|data:)/.test(props.src)) { fallback.value = props.src; return }
   retrying.value = retry
+  let previewTimer: ReturnType<typeof setTimeout> | undefined
+  const localPath = props.src.startsWith(location.origin + '/') ? props.src.slice(location.origin.length) : props.src
+  if (!props.thumbnail && props.preview?.startsWith('data:image/')) pendingPreview.value = props.preview
+  else if (!props.thumbnail && !previewReady.value && localPath.startsWith('/api/creation/media?')) {
+    const original = new URL(localPath, location.origin)
+    if (original.searchParams.has('requestId')
+      && [...original.searchParams.keys()].every(key => key === 'requestId' || key === 'index')) {
+      // The server already has these bytes. Asking for an external URL's preview would fetch that original twice.
+      previewTimer = setTimeout(() => {
+        if (!current.signal.aborted) pendingPreview.value = mediaSource(props.src, true) || ''
+      }, 1200)
+    }
+  }
   try {
     const blob = await readCreationImage(props.src, current.signal, props.thumbnail)
     if (current.signal.aborted || accepted !== revision) return
@@ -64,7 +79,7 @@ async function read(retry = false) {
     if (current.signal.aborted || accepted !== revision) return
     failed.value = true
   }
-  finally { if (accepted === revision) retrying.value = false }
+  finally { clearTimeout(previewTimer); if (accepted === revision) retrying.value = false }
 }
 function imageFailed(event: Event) {
   if ((event.target as HTMLImageElement).getAttribute('src') !== (replacement.value || fallback.value)) return
@@ -72,7 +87,7 @@ function imageFailed(event: Event) {
 }
 function retry() {
   if (retrying.value) return
-  clearImage()
+  clearImage(previewReady.value)
   forgetCreationImage(props.src, props.thumbnail); failed.value = false; loaded.value = false
   return read(true)
 }
@@ -80,10 +95,13 @@ function retry() {
 
 <template>
   <div ref="element" class="creation-image" :class="{ 'creation-image-thumbnail': thumbnail }">
-    <button v-if="failed" class="image-retry" type="button" :disabled="retrying" aria-label="重新加载图片" @click="retry"><RotateCw :size="18" /><span>{{ retrying ? '正在加载' : '重新加载图片' }}</span></button>
-    <div v-else-if="!replacement && !fallback" class="image-loading" :style="imageStyle" role="status"><LoaderCircle :size="20" aria-hidden="true" /><span>正在加载图片</span></div>
-    <img v-else-if="thumbnail" :src="replacement || fallback" :alt="alt" width="72" height="72" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
-    <button v-else type="button" class="creation-image-preview" :aria-label="label" :aria-busy="!loaded" @click="emit('open')">
+    <div v-if="failed ? previewReady : !replacement && !fallback" class="image-loading" :class="{ 'with-preview': previewReady }" :style="imageStyle" role="status">
+      <img v-if="pendingPreview" :key="pendingPreview" :src="pendingPreview" alt="生成图片预览" decoding="async" @load="previewReady = true" @error="pendingPreview = ''; previewReady = false" />
+      <template v-if="!previewReady"><LoaderCircle :size="20" aria-hidden="true" /><span>正在加载图片</span></template>
+    </div>
+    <button v-if="failed" class="image-retry" :class="{ 'after-preview': previewReady }" type="button" :disabled="retrying" aria-label="重新加载图片" @click="retry"><RotateCw :size="18" /><span>{{ retrying ? '正在加载' : '重新加载图片' }}</span></button>
+    <img v-else-if="thumbnail && (replacement || fallback)" :src="replacement || fallback" :alt="alt" width="72" height="72" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
+    <button v-else-if="replacement || fallback" type="button" class="creation-image-preview" :aria-label="label" :aria-busy="!loaded" @click="emit('open')">
       <img :key="replacement || fallback" :src="replacement || fallback" :alt="alt" :width="size?.width" :height="size?.height" :style="imageStyle" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
     </button>
     <button v-if="editable && loaded && !failed" type="button" class="creation-image-edit" aria-label="打开图片画布" title="画布编辑" @click.stop="emit('edit')"><SquarePen :size="18" /></button>
@@ -101,7 +119,11 @@ function retry() {
 .creation-image-preview:focus-visible, .image-retry:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .image-retry { display: flex; align-items: center; justify-content: center; gap: 8px; width: min(320px, 100%); min-height: 160px; padding: 16px; border: 0; border-radius: 6px; background: var(--surface-soft); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; }
 .image-retry:disabled { cursor: default; opacity: .6; }
+.image-retry.after-preview { width: fit-content; min-height: 44px; padding: 6px 10px; }
 .image-loading { display: flex; align-items: center; justify-content: center; gap: 8px; width: 320px; max-width: 100%; min-height: 160px; border-radius: 6px; background: var(--surface-soft); color: var(--muted); font-size: 14px; }
+.image-loading > img { display: none; max-width: 100%; max-height: var(--creation-image-height); }
+.image-loading.with-preview { width: fit-content; min-height: 0; }
+.image-loading.with-preview > img { display: block; }
 .creation-image-thumbnail, .creation-image-thumbnail > img { width: 72px; height: 72px; flex: none; }
 .creation-image-thumbnail > img { display: block; object-fit: cover; border-radius: 6px; }
 .creation-image-thumbnail .image-retry { width: 72px; min-height: 72px; padding: 4px; font-size: 11px; flex-direction: column; gap: 4px; }

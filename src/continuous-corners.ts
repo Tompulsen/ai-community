@@ -17,7 +17,7 @@ export const continuousCorners: ObjectDirective<HTMLElement, CornerOptions> = {
     const path = svg ? document.createElementNS(svgNamespace, 'path') : null
     let options = binding.value
     let previous = ''
-    let borderBox: ResizeObserverSize | undefined
+    let width = 0, height = 0
     if (svg && path) {
       svg.classList.add('continuous-outline')
       svg.setAttribute('aria-hidden', 'true')
@@ -31,8 +31,6 @@ export const continuousCorners: ObjectDirective<HTMLElement, CornerOptions> = {
       element.classList.add('continuous-surface')
     }
     function render() {
-      const width = clipping && borderBox ? borderBox.inlineSize : element.offsetWidth
-      const height = clipping && borderBox ? borderBox.blockSize : element.offsetHeight
       if (!width || !height) return
       const radius = Math.max(0, Math.min(options.radius, width / 2, height / 2))
       const smoothing = options.smoothing ?? 0.6
@@ -50,11 +48,12 @@ export const continuousCorners: ObjectDirective<HTMLElement, CornerOptions> = {
     }
     const observer = new ResizeObserver(([entry]) => {
       // Rounded offsets can expose a bright media strip beyond its fractional overlay.
-      borderBox = entry?.borderBoxSize[0]
+      const box = entry?.borderBoxSize?.[0]
+      width = box?.inlineSize ?? element.offsetWidth
+      height = box?.blockSize ?? element.offsetHeight
       render()
     })
     observer.observe(element, { box: 'border-box' })
-    render()
     states.set(element, {
       observer,
       update(value) { options = value; render() },

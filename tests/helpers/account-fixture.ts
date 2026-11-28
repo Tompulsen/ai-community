@@ -26,7 +26,7 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
     if (path === '/api/lottery/welfare') return route.fulfill({ json: { checkin: { enabled: false }, lottery: { enabled: false } } })
     if (path === '/api/session') return route.fulfill({ json: {
       user: state.authenticated ? state.user : null, csrfToken: 'unified-account-fixture',
-      authentication: 'zhangyu', accountUrl,
+      authentication: 'zhangyu', accountUrl, accountSyncRequired: !state.authenticated && state.accountAuthenticated,
     } })
     if (path === `/api/users/${state.user.id}`) return route.fulfill({ json: { user: { ...state.user, worksCount: 0, followingCount: 0, followersCount: 0, receivedLikesCount: 0 } } })
     if (path === '/api/account/privacy') {

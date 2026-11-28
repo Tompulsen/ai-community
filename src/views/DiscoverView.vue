@@ -30,6 +30,7 @@ const tagRail = ref<HTMLElement>()
 const canScrollBack = ref(false), canScrollForward = ref(false)
 let railObserver: ResizeObserver | undefined
 const works = ref<WorkSummary[]>([])
+const firstCover = computed(() => works.value.slice(0, 3).findIndex(item => item.kind !== 'resource' && item.cover))
 const tags = ref<{ id: string; name: string; category: WorkSummary['kind'] }[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -209,7 +210,7 @@ function reset() { query.value = ''; tag.value = ''; kind.value = 'all'; order.v
     <div v-if="query || tag || (!mobile && kind !== 'all')" class="search-result"><div class="active-conditions"><span v-if="kind !== 'all'">类型：{{ kind === 'resource' ? '资源' : kindLabels[kind as keyof typeof kindLabels] }}</span><span v-if="query">搜索：{{ query }}</span><span v-if="tag">标签：{{ tag }}</span></div><button v-if="query || tag" class="text-link" @click="clearConditions">清除条件 <X :size="13" /></button></div>
     <p v-if="error && !retryAppend" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load()">重试</button></p>
     <ContentSkeleton v-if="loading && !works.length" layout="works" label="正在加载作品…" />
-    <BentoGrid v-else-if="works.length" ref="grid" class="discover-grid"><WorkCard v-for="(work, index) in works" :key="work.id" :work="work" :eager="index < 3" /></BentoGrid>
+    <BentoGrid v-else-if="works.length" ref="grid" class="discover-grid"><WorkCard v-for="(work, index) in works" :key="work.id" :work="work" :eager="index < 3" :priority="index === firstCover" /></BentoGrid>
     <div v-else-if="!error && order === 'following' && session.ready && !session.user" class="empty-state"><SearchX :size="32" /><h2>登录后查看关注的作品</h2><RouterLink to="/account" class="button primary btn">登录</RouterLink></div>
     <div v-else-if="!error" class="empty-state discovery-empty"><SearchX v-if="hasConditions" :size="32" /><LayoutGrid v-else :size="32" aria-hidden="true" /><h2>{{ order === 'following' ? '还没有关注的作品' : hasConditions ? '没有找到相关作品' : '这里还没有作品' }}</h2><p>{{ hasConditions ? '试试其他关键词，或恢复默认浏览。' : '第一份已公开的作品会出现在这里。' }}</p><button v-if="hasConditions" class="button btn subtle" @click="reset">恢复默认</button></div>
     <div ref="feedEnd" class="feed-end">

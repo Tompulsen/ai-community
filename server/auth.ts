@@ -6,7 +6,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Redis } from 'ioredis'
-import { accountCenter, accountSessionHash, accountSessionVerifier } from './account-session.ts'
+import { accountCenter, accountSessionCookie, accountSessionHash, accountSessionVerifier } from './account-session.ts'
 import { rememberPublicIdentity } from './public-identity.ts'
 import { AccountRequest, revokeAccountSession } from './native-account/index.ts'
 import { isNewApiEnabled } from './native-account/config.ts'
@@ -191,7 +191,8 @@ export function authServices({ db, config }: { db: Database; redis: Redis; confi
     if (url.pathname === '/api/session' && req.method === 'GET') {
       if (String(req.headers.cookie || '').split(';').some(value => value.trim().startsWith(`${legacySessionCookie}=`)))
         appendCookie(res, `${legacySessionCookie}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`)
-      ctx.json(200, { user: publicUser(user), authentication: 'zhangyu', accountUrl: accountCenter(config) })
+      ctx.json(200, { user: publicUser(user), authentication: 'zhangyu', accountUrl: accountCenter(config),
+        accountSyncRequired: !user && accountSessionCookie(req) !== null })
       return true
     }
     if (url.pathname === '/api/registration' && req.method === 'GET') {

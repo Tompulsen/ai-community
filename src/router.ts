@@ -1,6 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import DiscoverView from './views/DiscoverView.vue'
-import MessagesView from './views/MessagesView.vue'
 import { session } from './state'
 import { loginReturnPath } from './login-navigation'
 import { saveDiscoveryCache } from './discovery-cache'
@@ -9,7 +7,7 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', redirect: '/discover' },
-    { path: '/discover', component: DiscoverView, meta: { title: '首页' } },
+    { path: '/discover', component: () => import('./views/DiscoverView.vue'), meta: { title: '首页' } },
     { path: '/work/:id', component: () => import('./views/WorkView.vue'), meta: { title: '作品详情' } },
     { path: '/create/:kind?', component: () => import('./views/CreateView.vue'), meta: { title: '创作台' } },
     { path: '/library', component: () => import('./views/LibraryView.vue'), meta: { title: '我的作品' } },
@@ -20,7 +18,7 @@ export const router = createRouter({
     { path: '/community', component: () => import('./views/CommunityView.vue'), meta: { title: '社区' } },
     { path: '/account', component: () => import('./views/AccountView.vue'), meta: { title: '账号设置' } },
     { path: '/account/authorize', redirect: '/account' },
-    { path: '/messages/:userId?', component: MessagesView, meta: { title: '消息' } },
+    { path: '/messages/:userId?', component: () => import('./views/MessagesView.vue'), meta: { title: '消息' } },
     { path: '/admin', component: () => import('./views/AdminView.vue'), meta: { title: '管理' } },
     { path: '/:pathMatch(.*)*', component: () => import('./views/NotFoundView.vue'), meta: { title: '页面未找到' } },
   ],

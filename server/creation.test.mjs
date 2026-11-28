@@ -565,6 +565,10 @@ test('legacy private originals remain readable and are removed with their expire
   const original = await f.app.inject(outputs[0].url)
   assert.equal(original.statusCode, 200); assert.deepEqual(original.rawPayload, bytes)
   assert.equal((await f.app.inject({ url: outputs[0].url, headers: { 'x-test-account': '18' } })).statusCode, 404)
+  const previewUrl = outputs[0].url + '&variant=preview'
+  const preview = await f.app.inject(previewUrl)
+  assert.equal(preview.statusCode, 200); assert.equal(preview.headers['content-type'], 'image/webp')
+  assert.equal((await f.app.inject({ url: previewUrl, headers: { 'x-test-account': '18' } })).statusCode, 404)
   t.mock.method(Date, 'now', () => row.record.requestExpiresAt)
   await cleanupCreationRequests(f.redis, f.db, f.filesRoot)
   const directory = path.join(f.filesRoot, '.creation-images', row.key.split(':')[3], createHash('sha256').update('passthrough').digest('hex'))

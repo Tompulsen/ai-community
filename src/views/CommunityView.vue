@@ -2,6 +2,7 @@
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowUpRight, Bookmark, Heart, Images, LockKeyhole, MessageSquare, Pencil, Settings, LayoutGrid, WandSparkles, Trash2, Users, X } from '@lucide/vue'
+import { previewImageUrl } from '../image-download'
 import WorkCard from '../components/WorkCard.vue'
 import WorkManagementDialogs from '../components/WorkManagementDialogs.vue'
 import BentoGrid from '../components/BentoGrid.vue'
@@ -301,7 +302,7 @@ async function removeFollower() {
           <div class="profile-people-body">
             <p v-if="peopleError" class="form-error" role="alert">{{ peopleError }} <button class="text-link" @click="loadPeople()">重试</button></p>
             <div v-if="peopleLoading && !people.length" class="profile-people-status" role="status">正在加载列表…</div>
-            <div class="people-list"><article v-for="person in people" :key="person.id" class="person-row"><RouterLink :to="{ path: '/community', query: { creator: person.id } }" class="person-identity"><span class="avatar blue"><img v-if="person.avatarUrl" :src="person.avatarUrl" :alt="person.name || person.username" /><span v-else>{{ (person.name || person.username || '用').slice(0, 1) }}</span></span><div><strong>{{ person.name || person.username }}</strong><p v-if="creatorIdentity(person)" class="caption-5">{{ creatorIdentity(person) }}</p></div></RouterLink><div class="person-actions"><FollowButton :person="person" @changed="updateRelationship" /><button v-if="isOwnProfile && peopleMode === 'followers'" class="button btn subtle" @click="removing = person; removeDialog?.showModal()">移除粉丝</button></div></article></div>
+            <div class="people-list"><article v-for="person in people" :key="person.id" class="person-row"><RouterLink :to="{ path: '/community', query: { creator: person.id } }" class="person-identity"><span class="avatar blue"><img v-if="person.avatarUrl" :src="previewImageUrl(person.avatarUrl, 96)" loading="lazy" decoding="async" :alt="person.name || person.username" /><span v-else>{{ (person.name || person.username || '用').slice(0, 1) }}</span></span><div><strong>{{ person.name || person.username }}</strong><p v-if="creatorIdentity(person)" class="caption-5">{{ creatorIdentity(person) }}</p></div></RouterLink><div class="person-actions"><FollowButton :person="person" @changed="updateRelationship" /><button v-if="isOwnProfile && peopleMode === 'followers'" class="button btn subtle" @click="removing = person; removeDialog?.showModal()">移除粉丝</button></div></article></div>
             <p v-if="!peopleLoading && !people.length && !peopleError" class="profile-people-status">暂无{{ peopleMode === 'followers' ? '粉丝' : '关注' }}</p>
             <div v-if="nextCursor" class="feed-end"><button class="button btn" :disabled="peopleLoading" @click="loadPeople(true)">加载更多</button></div>
           </div>
@@ -312,7 +313,7 @@ async function removeFollower() {
     <template v-else>
       <section class="creators-grid" aria-label="社区创作者">
         <article v-for="item in creators" :key="item.id" class="creator-card card">
-          <RouterLink :to="{ path: '/community', query: { creator: item.id } }" class="creator-identity"><span class="avatar blue"><img v-if="item.avatarUrl" :src="item.avatarUrl" :alt="item.name || item.username" /><span v-else>{{ (item.name || item.username).slice(0, 1) }}</span></span><div class="creator-name"><h2>{{ item.name || item.username }}</h2><p v-if="creatorIdentity(item)" class="caption-5">{{ creatorIdentity(item) }}</p></div><ArrowUpRight :size="16" /></RouterLink>
+          <RouterLink :to="{ path: '/community', query: { creator: item.id } }" class="creator-identity"><span class="avatar blue"><img v-if="item.avatarUrl" :src="previewImageUrl(item.avatarUrl, 96)" loading="lazy" decoding="async" :alt="item.name || item.username" /><span v-else>{{ (item.name || item.username).slice(0, 1) }}</span></span><div class="creator-name"><h2>{{ item.name || item.username }}</h2><p v-if="creatorIdentity(item)" class="caption-5">{{ creatorIdentity(item) }}</p></div><ArrowUpRight :size="16" /></RouterLink>
           <p v-if="item.bio" class="creator-summary">{{ item.bio }}</p>
           <div class="creator-footer"><span class="caption-5">{{ item.count }} 件公开作品</span><FollowButton :person="item" @changed="updateRelationship" /></div>
         </article>

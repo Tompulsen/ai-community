@@ -437,7 +437,16 @@ describe('real API state', () => {
     expect(session.user).toBeNull()
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
-  it('silently synchronizes an existing account login and treats a normal guest as anonymous', async () => {
+  it('finishes a confirmed guest session without synchronizing the account', async () => {
+    fetchMock.mockResolvedValueOnce(response({ user: null, authentication: 'zhangyu', accountSyncRequired: false }))
+    const { loadSession, session, sessionStatus } = await import('./state')
+    session.user = user
+    await Promise.all([loadSession(true), loadSession()])
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/session'])
+    expect(sessionStatus.value).toBe('guest')
+    expect(session.user).toBeNull()
+  })
+  it('falls back to silent synchronization for servers without the sync hint', async () => {
     fetchMock.mockImplementation((path: string) => path === '/api/session'
       ? response({ user: null, csrfToken: 'visitor-csrf', authentication: 'zhangyu', accountUrl: 'https://accounts.example' })
       : response({ message: 'Login required' }, 401))
@@ -451,7 +460,7 @@ describe('real API state', () => {
   it('synchronizes a newly signed-in native account after logout without requiring a page reload', async () => {
     const switchedUser = { ...user, id: '25', accountId: '25', username: 'another-account' }
     fetchMock.mockResolvedValueOnce(response({ user: null }))
-      .mockResolvedValueOnce(response({ user: null, authentication: 'zhangyu' }))
+      .mockResolvedValueOnce(response({ user: null, authentication: 'zhangyu', accountSyncRequired: true }))
       .mockResolvedValueOnce(response({ user: switchedUser }))
       .mockResolvedValueOnce(response({ user: switchedUser, authentication: 'zhangyu' }))
     const { loadSession, logout, session } = await import('./state')

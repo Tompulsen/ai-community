@@ -17,7 +17,7 @@ import { sniffType, uploadMedia, uploadLimitsFor, mediaState, fileDto } from './
 import { getUser } from './auth.ts';
 import { imageExtensions, videoExtensions, publicImageName, privateMetadataFreeImage } from './image-privacy.ts';
 import { privateMetadataFreeVideo } from './video-privacy.ts';
-import { coverImage, jpegImage, downloadImage } from './image-export.ts';
+import { coverImage, jpegImage, downloadImage, sizedPreviewImage, type PreviewWidth } from './image-export.ts';
 import { isImageDownloadFormat } from '../shared/image-download.ts';
 import { accountCenter } from './account-session.ts';
 import { readPublicIdentities } from './public-identity.ts';
@@ -1097,6 +1097,9 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   if (format !== null && format !== 'jpeg') fail(400, 'Invalid media format');
   const download = ctx.url.searchParams.get('download');
   if (download !== null && download !== 'original' && !isImageDownloadFormat(download)) fail(400, 'Invalid download format');
+  const requestedWidth = !download && !format && (variant === 'thumbnail' || variant === 'cover') ? ctx.url.searchParams.get('width') : null;
+  if (requestedWidth !== null && !['96', '256', '498'].includes(requestedWidth)) fail(400, 'Invalid preview width');
+  const width = requestedWidth ? Number(requestedWidth) as PreviewWidth : null;
   if (byKey ? !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(value) : !idPattern.test(value)) fail(404, 'File not found');
   const keyWhere = byKey ? '(f."accessKey"=$2 OR f."thumbnailAccessKey"=$2 OR f."webpublicAccessKey"=$2)' : 'f.id=$2';
   const result = await ctx.db.query<MediaRow>(`
@@ -1137,7 +1140,7 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   [viewer(ctx), value, Boolean(ctx.user?.isAdmin || ctx.user?.isModerator), new URL(ctx.config.url).origin, Boolean(ctx.user?.isAdmin)]);
   const file = result.rows[0];
   if (!file) fail(404, 'File not found');
-  const preferred = download || variant === 'cover' || byKey && ctx.url.searchParams.get('variant') === 'original' ? 'original' : byKey ? value === file.thumbnailAccessKey ? 'thumbnail' : value === file.webpublicAccessKey ? 'webpublic' : 'original' : variant;
+  const preferred = download || variant === 'cover' || byKey && ctx.url.searchParams.get('variant') === 'original' ? 'original' : width ? variant : byKey ? value === file.thumbnailAccessKey ? 'thumbnail' : value === file.webpublicAccessKey ? 'webpublic' : 'original' : variant;
   const storedFile = async (accessKey: string | null): Promise<{ path: string; metadata: Stats }> => {
     if (typeof accessKey !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(accessKey) || accessKey === '.' || accessKey === '..') fail(404, 'File not found');
     const root = await realpath(ctx.filesRoot);
@@ -1200,7 +1203,23 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
     exported = await downloadImage(path, metadata, download);
     type = `image/${download}`;
   }
-  if (!download && variant === 'cover' && type && imageExtensions[type]) {
+  if (width && (!type || !imageExtensions[type])) fail(404, 'Image preview not found');
+  if (width) {
+    const preferStored = variant === 'cover' && role !== 'thumbnail' && Boolean(file.thumbnailAccessKey);
+    let useThumbnail = false;
+    try {
+      exported = await sizedPreviewImage(path, metadata, width, preferStored);
+      useThumbnail = preferStored && exported === null;
+    } catch { /* Keep the authorized source if animation or conversion cannot be handled. */ }
+    if (useThumbnail) {
+      ({ path, metadata, type, role, storageKey } = await loadMedia('thumbnail'));
+      if (type && imageExtensions[type]) {
+        try { exported = await sizedPreviewImage(path, metadata, width); }
+        catch { /* Serve the checked file if conversion is busy or unavailable. */ }
+      }
+    }
+    if (exported) type = 'image/webp';
+  } else if (!download && variant === 'cover' && type && imageExtensions[type]) {
     let staticImage = false;
     try { exported = await coverImage(path, metadata); staticImage = exported === null; }
     catch { /* A busy or failed encoder must retain the safe original's animation. */ }
@@ -1218,8 +1237,9 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   ctx.reply.header('Content-Type', mime);
   ctx.reply.header('X-Content-Type-Options', 'nosniff');
   ctx.reply.header('Content-Security-Policy', "default-src 'none'; sandbox");
-  const etag = file.publiclyVisible && (role !== 'original' || renderedCover) && type && imageExtensions[type]
-    ? `W/"${createHash('sha256').update(JSON.stringify([file.id, renderedCover ? 'cover-v1' : role, storageKey, mime, format, download, size, metadata.mtimeMs, metadata.ctimeMs])).digest('base64url')}"`
+  const previewKey = width && exported ? `preview-v1-${width}` : renderedCover ? 'cover-v1' : null;
+  const etag = file.publiclyVisible && (role !== 'original' || previewKey) && type && imageExtensions[type]
+    ? `W/"${createHash('sha256').update(JSON.stringify([file.id, previewKey ?? role, storageKey, mime, format, download, size, metadata.mtimeMs, metadata.ctimeMs])).digest('base64url')}"`
     : null;
   ctx.reply.header('Cache-Control', etag ? 'private, no-cache' : 'private, no-store');
   if (etag) {

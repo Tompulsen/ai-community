@@ -6,6 +6,7 @@ for (const stalledPath of ['/api/session', '/api/account/session']) {
     const errors: string[] = []
     page.on('pageerror', error => errors.push(error.message))
     const account = await mockUnifiedAccount(page)
+    account.state.accountAuthenticated = true
     await page.clock.install()
     let stalled = true
     await page.route(`**${stalledPath}`, route => stalled ? undefined : route.fallback())
@@ -31,10 +32,11 @@ for (const stalledPath of ['/api/session', '/api/account/session']) {
 
 test('studio shows the sign-in entry for a confirmed guest on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
-  await mockUnifiedAccount(page)
+  const account = await mockUnifiedAccount(page)
   await page.goto('/create')
   await expect(page.getByRole('heading', { name: '登录后开始创作' })).toBeVisible()
   await expect(page.locator('.studio-account-status, .loading-form')).toHaveCount(0)
+  expect(account.mutations.map(item => item.path)).not.toContain('/api/account/session')
 })
 
 test('studio keeps its shell and hides sign-in while the shared session loads', async ({ page }) => {

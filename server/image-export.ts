@@ -1,5 +1,5 @@
 import type { Stats } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { httpError } from './auth.ts';
 import { createHash } from 'node:crypto';
@@ -22,21 +22,23 @@ async function enqueue<T>(work: () => Promise<T>): Promise<T> {
   try { return await task; } finally { queued--; }
 }
 
+function ensureSupportedAnimation(source: Buffer) {
+  const inputType = sniffType(source.subarray(0, 64), 'application/octet-stream');
+  let unsupportedAnimation = inputType === 'image/avif' && source.subarray(0, Math.min(source.readUInt32BE(0), 4096)).includes(Buffer.from('avis'));
+  if (inputType === 'image/png') for (let offset = 8; offset + 8 <= source.length;) {
+    const type = source.toString('ascii', offset + 4, offset + 8);
+    if (type === 'acTL') { unsupportedAnimation = true; break; }
+    if (type === 'IDAT' || type === 'IEND') break;
+    offset += source.readUInt32BE(offset) + 12;
+  }
+  if (unsupportedAnimation) throw httpError(400, '此动图暂不支持保留动画转换，请选择 JPG / PNG 保存首帧。');
+}
+
 async function encodeDownload(source: Buffer, format: ImageDownloadFormat): Promise<Buffer> {
   if (!source.length || source.length > maxBytes) throw httpError(413, '图片超过 32 MB，暂时无法转换下载。');
   if (!/^image\/(jpeg|png|webp|gif|avif)$/.test(sniffType(source.subarray(0, 64), 'application/octet-stream')))
     throw httpError(400, '不支持的图片格式。');
-  if (format === 'gif' || format === 'webp') {
-    const inputType = sniffType(source.subarray(0, 64), 'application/octet-stream');
-    let unsupportedAnimation = inputType === 'image/avif' && source.subarray(0, Math.min(source.readUInt32BE(0), 4096)).includes(Buffer.from('avis'));
-    if (inputType === 'image/png') for (let offset = 8; offset + 8 <= source.length;) {
-      const type = source.toString('ascii', offset + 4, offset + 8);
-      if (type === 'acTL') { unsupportedAnimation = true; break; }
-      if (type === 'IDAT' || type === 'IEND') break;
-      offset += source.readUInt32BE(offset) + 12;
-    }
-    if (unsupportedAnimation) throw httpError(400, '此动图暂不支持保留动画转换，请选择 JPG / PNG 保存首帧。');
-  }
+  if (format === 'gif' || format === 'webp') ensureSupportedAnimation(source);
   try {
     const image = sharp(source, { animated: format === 'webp' || format === 'gif', limitInputPixels: 100_000_000, failOn: 'warning' });
     const metadata = await image.metadata();
@@ -89,16 +91,35 @@ export async function coverImage(source: string, metadata: Stats): Promise<Buffe
   return cachedImage(source, metadata, 'cover-v1');
 }
 
-async function cachedImage(source: string, metadata: Stats, format: 'jpeg-v1' | 'cover-v1' | ImageDownloadFormat): Promise<Buffer | null> {
-  const key = JSON.stringify([format, source, metadata.size, metadata.mtimeMs, metadata.ctimeMs]);
-  if (cache.has(key)) {
-    const value = cache.get(key)!;
-    cache.delete(key); cache.set(key, value);
-    return value;
+export type PreviewWidth = 96 | 256 | 498;
+
+export async function sizedPreviewImage(source: string, metadata: Stats, width: PreviewWidth, animatedOnly = false): Promise<Buffer | null> {
+  // Route common static covers to the stored thumbnail even when every conversion slot is busy.
+  if (animatedOnly) {
+    const handle = await open(source, 'r');
+    try {
+      const header = Buffer.alloc(32);
+      const { bytesRead } = await handle.read(header, 0, header.length, 0);
+      const type = sniffType(header.subarray(0, bytesRead), 'application/octet-stream');
+      if (type === 'image/jpeg' || (type === 'image/webp' && bytesRead > 20 &&
+        (header.toString('ascii', 12, 16) !== 'VP8X' || !(header[20] & 2)))) return null;
+    } finally { await handle.close(); }
   }
-  const existing = pending.get(key);
-  if (existing) return existing;
-  const task = enqueue(async () => {
+  return cachedConversion(source, metadata, `preview-v1-${width}-${animatedOnly}`, async () => {
+    if (metadata.size > maxBytes) throw httpError(413, '预览文件过大。');
+    const input = await readFile(source);
+    ensureSupportedAnimation(input);
+    const image = sharp(input, { animated: true, limitInputPixels: 100_000_000, failOn: 'warning' });
+    const details = await image.metadata();
+    if (animatedOnly && (details.pages ?? 1) === 1) return null;
+    if ((details.pages ?? 1) > 500) throw httpError(413, '动画帧数过多。');
+    return image.rotate().resize({ width, height: width * 2, fit: 'inside', withoutEnlargement: true })
+      .keepIccProfile().webp({ quality: 80, effort: 3 }).timeout({ seconds: 30 }).toBuffer();
+  });
+}
+
+function cachedImage(source: string, metadata: Stats, format: 'jpeg-v1' | 'cover-v1' | ImageDownloadFormat): Promise<Buffer | null> {
+  return cachedConversion(source, metadata, format, async () => {
     const input = await readFile(source);
     const image = sharp(input, { animated: format === 'cover-v1', limitInputPixels: 100_000_000, failOn: 'warning' });
     const details = await image.metadata();
@@ -109,6 +130,21 @@ async function cachedImage(source: string, metadata: Stats, format: 'jpeg-v1' | 
         .webp({ quality: 82 }).timeout({ seconds: 30 }).toBuffer() : null
       : animated ? null : await image.rotate().flatten({ background: '#ffffff' })
         .jpeg({ quality: 95, chromaSubsampling: '4:4:4' }).timeout({ seconds: 30 }).toBuffer();
+    return output;
+  });
+}
+
+async function cachedConversion(source: string, metadata: Stats, format: string, convert: () => Promise<Buffer | null>): Promise<Buffer | null> {
+  const key = JSON.stringify([format, source, metadata.size, metadata.mtimeMs, metadata.ctimeMs]);
+  if (cache.has(key)) {
+    const value = cache.get(key)!;
+    cache.delete(key); cache.set(key, value);
+    return value;
+  }
+  const existing = pending.get(key);
+  if (existing) return existing;
+  const task = enqueue(async () => {
+    const output = await convert();
     if (!output || output.length <= maxBytes) {
       while (cache.size && (cache.size >= 128 || bytes + (output?.length ?? 0) > maxBytes)) {
         const oldest = cache.keys().next().value!;

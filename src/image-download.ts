@@ -1,13 +1,28 @@
 import type { ImageDownloadChoice } from '../shared/image-download'
 
-export function originalImageUrl(value: string): string {
+function localImageUrl(value: string): URL | undefined {
   try {
     const url = new URL(value, location.href)
-    if (url.origin !== location.origin || !/^\/(?:legacy-files|files)\/[^/]+$/.test(url.pathname)) return value
-    url.searchParams.delete('format'); url.searchParams.delete('download')
-    url.searchParams.set('variant', 'original')
-    return url.pathname + url.search + url.hash
-  } catch { return value }
+    if (url.origin === location.origin && /^\/(?:legacy-files|files)\/[^/]+$/.test(url.pathname)) return url
+  } catch { /* Other media sources keep their original URL. */ }
+}
+
+export function previewImageUrl(value: string, width: 96 | 256 | 498, fallback: 'cover' | 'thumbnail' = 'thumbnail'): string {
+  const url = localImageUrl(value)
+  if (!url) return value
+  const variant = url.searchParams.get('variant')
+  if (variant !== 'cover' && variant !== 'thumbnail') url.searchParams.set('variant', fallback)
+  url.searchParams.delete('format'); url.searchParams.delete('download')
+  url.searchParams.set('width', String(width))
+  return url.pathname + url.search + url.hash
+}
+
+export function originalImageUrl(value: string): string {
+  const url = localImageUrl(value)
+  if (!url) return value
+  url.searchParams.delete('format'); url.searchParams.delete('download'); url.searchParams.delete('width')
+  url.searchParams.set('variant', 'original')
+  return url.pathname + url.search + url.hash
 }
 
 export async function isAnimatedImage(blob: Blob): Promise<boolean> {
@@ -77,11 +92,9 @@ export async function imageDownload(blob: Blob, format: ImageDownloadChoice, sig
   } finally { bitmap.close() }
 }
 export function imageDownloadUrl(value: string, format: ImageDownloadChoice): string {
-  try {
-    const url = new URL(value, location.href)
-    if (url.origin !== location.origin || !/^\/(?:legacy-files|files)\/[^/]+$/.test(url.pathname)) return value
-    url.searchParams.delete('format'); url.searchParams.set('download', format)
-    url.searchParams.set('variant', 'original')
-    return url.pathname + url.search + url.hash
-  } catch { return value }
+  const url = localImageUrl(value)
+  if (!url) return value
+  url.searchParams.delete('format'); url.searchParams.delete('width'); url.searchParams.set('download', format)
+  url.searchParams.set('variant', 'original')
+  return url.pathname + url.search + url.hash
 }

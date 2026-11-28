@@ -35,10 +35,15 @@ async function fixture(page: Page, selected: Work = { ...work }, authenticated =
   await page.route('**/api/works**', route => {
     const request = route.request(), path = new URL(request.url()).pathname
     if (path === '/api/works') {
-      state.queries.push(new URL(request.url()))
+      const url = new URL(request.url())
+      state.queries.push(url)
+      const limit = Number(url.searchParams.get('limit') || 20)
+      const start = state.relatedItems.findIndex(item => item.id === url.searchParams.get('cursor')) + 1
+      const items = state.relatedItems.slice(start, start + limit)
+      const nextCursor = state.nextCursor ?? (start + limit < state.relatedItems.length ? items.at(-1)?.id : null)
       return state.failRelated
         ? route.fulfill({ status: 503, json: { message: '暂时无法加载' } })
-        : route.fulfill({ json: { items: state.relatedItems, nextCursor: state.nextCursor } })
+        : route.fulfill({ json: { items, nextCursor } })
     }
     const current = items.find(item => path === `/api/works/${item.id}`)
     if (current) return route.fulfill({ json: { work: current } })
@@ -158,6 +163,8 @@ test('detail and recommendations adapt without cropping, overlap or horizontal o
   page.on('pageerror', error => errors.push(error.message))
   await fixture(page)
   await page.goto('/work/detailwork')
+  await expect(page.locator('.related-works .work-card')).toHaveCount(7)
+  await page.locator('.related-works').getByRole('button', { name: '加载更多', exact: true }).click()
   await expect(page.locator('.related-works .work-card')).toHaveCount(24)
   for (const width of [2560, 1440, 1280, 1024, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 })
@@ -204,10 +211,12 @@ for (const width of [390, 1440]) test(`work images, references and downloads ret
   await page.route('**/legacy-files/jpeg*', route => {
     const url = new URL(route.request().url())
     expect(url.searchParams.has('format')).toBe(false)
-    expect(url.searchParams.get('variant') || 'original').toBe('original')
+    if (url.searchParams.get('width') === '96') expect(url.searchParams.get('variant')).toBe('thumbnail')
+    else expect(url.searchParams.get('variant')).toBe('original')
     return route.fulfill({ contentType: 'image/png', body: original })
   })
   await page.goto('/work/detailwork')
+  await expect(page.locator('.material-thumbnail img').first()).toHaveAttribute('src', '/legacy-files/jpegwork?variant=thumbnail&width=96')
   const img = page.locator('.detail-media img')
   await expect(img).toHaveAttribute('src', '/legacy-files/jpegwork?variant=original')
   await img.evaluate((image: HTMLImageElement) => image.decode())
@@ -595,6 +604,21 @@ test('detail controls and both themes remain accessible on desktop and mobile', 
   }
 })
 
+test('mobile recommendations first load on opening and keep results on reopening', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const state = await fixture(page)
+  await page.goto('/work/detailwork')
+  const trigger = page.getByRole('button', { name: '更多作品', exact: true })
+  await expect(trigger).toBeVisible()
+  expect(state.queries).toHaveLength(0)
+  await trigger.click()
+  await expect(page.locator('.related-grid .work-card').first()).toBeVisible()
+  await page.keyboard.press('Escape')
+  await trigger.click()
+  await expect(page.locator('.related-grid .work-card').first()).toBeVisible()
+  expect(state.queries).toHaveLength(1)
+})
+
 test('same-tag recommendations exclude unrelated works, deduplicate and preserve results across a page retry', async ({ page }) => {
   const selected = { ...work, tags: ['摄影', '光影'] }
   const state = await fixture(page, selected)
@@ -606,7 +630,7 @@ test('same-tag recommendations exclude unrelated works, deduplicate and preserve
   await expect(page.locator('.related-works .work-card')).toHaveCount(2)
   expect(state.queries[0]!.searchParams.getAll('tag')).toEqual(['摄影', '光影'])
   expect(state.queries[0]!.searchParams.get('kind')).toBe('image')
-  expect(state.queries[0]!.searchParams.get('limit')).toBe('20')
+  expect(state.queries[0]!.searchParams.get('limit')).toBe('8')
   state.failRelated = true
   await page.getByRole('button', { name: '加载更多', exact: true }).click()
   await expect(page.locator('.related-works [role="alert"]')).toBeVisible()
@@ -617,6 +641,7 @@ test('same-tag recommendations exclude unrelated works, deduplicate and preserve
   await page.getByRole('button', { name: '重试加载', exact: true }).click()
   await expect(page.locator('.related-works .work-card')).toHaveCount(3)
   expect(state.queries.at(-1)!.searchParams.get('cursor')).toBe('nextpage')
+  expect(state.queries.at(-1)!.searchParams.get('limit')).toBe('20')
   await expect(page.getByRole('button', { name: '加载更多', exact: true })).toHaveCount(0)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.getByRole('button', { name: '更多作品', exact: true }).click()

@@ -216,13 +216,13 @@ export async function loadSession(force = false) {
     session.error = ''
     let missingSession = false
     try {
-      type SessionResult = { user: SessionUser | null; csrfToken?: string; authentication?: string; accountUrl?: string }
+      type SessionResult = { user: SessionUser | null; csrfToken?: string; authentication?: string; accountUrl?: string; accountSyncRequired?: boolean }
       let result = await api<SessionResult>('/api/session', { signal: controller.signal })
       if (version !== sessionVersion) return
       session.csrfToken = result.csrfToken || ''
       session.accountUrl = result.accountUrl || session.accountUrl
       missingSession = !result.user
-      if (!result.user && result.authentication === 'zhangyu') {
+      if (!result.user && result.authentication === 'zhangyu' && result.accountSyncRequired !== false) {
         // Commit the final identity once so renewal does not remount the current page.
         session.restoring = Boolean(session.user)
         try {

@@ -337,6 +337,55 @@ test('work cover reuses static thumbnails and keeps video posters unchanged', as
   assert.equal(fallback.statusCode, 200); assert.deepEqual(fallback.rawPayload, original)
 })
 
+test('sized previews reduce stored thumbnail bytes, revalidate each width and retain full-size downloads', async t => {
+  const f = await fixture(t)
+  const original = await readFile(new URL('../public/assets/brand/octopus-community.jpg', import.meta.url))
+  const legacyThumbnail = await sharp(await sharp(original).webp({ quality: 82 }).toBuffer()).webp({ lossless: true, exact: true, effort: 0 }).toBuffer()
+  await writeFile(path.join(f.filesRoot, 'original-key'), original)
+  await writeFile(path.join(f.filesRoot, 'thumbnail-key'), legacyThumbnail)
+  Object.assign(f.media, { type: 'image/jpeg', publiclyVisible: true,
+    properties: { communityImagePrivacy: { 'original-key': 1, 'thumbnail-key': 1 } } })
+  const get = (query, headers) => f.app.inject({ method: 'GET', url: '/legacy-files/file1?' + query, headers })
+  const old = await get('variant=cover')
+  assert.deepEqual(old.rawPayload, legacyThumbnail)
+  const bytes = {}
+  let etag = old.headers.etag
+  for (const width of [498, 256, 96]) {
+    const url = 'variant=cover&width=' + width
+    const response = await get(url, { 'if-none-match': etag })
+    assert.equal(response.statusCode, 200); assert.notEqual(response.headers.etag, etag)
+    assert.equal(response.headers['cache-control'], 'private, no-cache')
+    assert.equal(response.headers.vary, 'Cookie, Authorization')
+    const metadata = await sharp(response.rawPayload).metadata()
+    assert.equal(metadata.format, 'webp'); assert.equal(metadata.width, Math.min(320, width))
+    assert.equal(metadata.exif, undefined); assert(response.rawPayload.length < old.rawPayload.length)
+    etag = response.headers.etag; bytes[width] = response.rawPayload.length
+    assert.equal((await get(url, { 'if-none-match': etag })).statusCode, 304)
+  }
+  t.diagnostic(`320px brand fixture, legacy ${old.rawPayload.length} bytes, sized ${JSON.stringify(bytes)}`)
+  assert.deepEqual((await get('variant=thumbnail&width=96&download=original')).rawPayload, original)
+  assertJsonError(await get('variant=thumbnail&width=1000'), 400)
+  f.media.type = 'video/mp4'
+  const poster = await get('variant=thumbnail&width=96')
+  assert.equal(poster.headers['content-type'], 'image/webp'); assert.equal((await sharp(poster.rawPayload).metadata()).width, 96)
+  f.denyMedia()
+  assertJsonError(await get('variant=thumbnail&width=96', { 'if-none-match': poster.headers.etag }), 404)
+})
+
+test('small animated covers keep every frame and its timing', async t => {
+  const f = await fixture(t)
+  const pixels = Buffer.concat([Buffer.alloc(192 * 192 * 3), Buffer.alloc(192 * 192 * 3, 255)])
+  const original = await sharp(pixels, { raw: { width: 192, height: 384, channels: 3, pageHeight: 192 } })
+    .webp({ delay: [100, 250], loop: 2 }).toBuffer()
+  await writeFile(path.join(f.filesRoot, 'original-key'), original)
+  Object.assign(f.media, { type: 'image/webp', properties: { communityImagePrivacy: { 'original-key': 1 } } })
+  const response = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=cover&width=96' })
+  const info = await sharp(response.rawPayload, { animated: true }).metadata()
+  assert.equal(info.width, 96); assert.equal(info.pageHeight, 96); assert.equal(info.pages, 2)
+  assert.deepEqual(info.delay, [100, 250]); assert.equal(info.loop, 2)
+  assert.equal(response.headers['cache-control'], 'private, no-store')
+})
+
 test('work cover privacy failure never exposes the original or a cached image', async t => {
   const f = await fixture(t)
   const original = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } })
@@ -376,6 +425,8 @@ test('work cover keeps the safe original moving when the conversion queue is ful
   Object.assign(f.media, { type: 'image/webp', publiclyVisible: true,
     properties: { communityImagePrivacy: { 'original-key': 1 } } })
   const metadata = await stat(source), gate = deferred(), readMetadata = sharp.prototype.metadata
+  const poster = await readFile(path.join(f.filesRoot, 'thumbnail-key'))
+  await writeFile(path.join(f.filesRoot, 'static-source'), await readFile(new URL('../public/assets/brand/octopus-community.jpg', import.meta.url)))
   const mocked = t.mock.method(sharp.prototype, 'metadata', function (...args) {
     return gate.promise.then(() => readMetadata.apply(this, args))
   })
@@ -384,6 +435,14 @@ test('work cover keeps the safe original moving when the conversion queue is ful
     const response = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=cover' })
     assert.equal(response.statusCode, 200); assert.deepEqual(response.rawPayload, original)
     assert.equal(response.headers.etag, undefined); assert.equal(response.headers['cache-control'], 'private, no-store')
+    const sizedUrl = '/legacy-files/file1?variant=cover&width=96'
+    const moving = await f.app.inject({ method: 'GET', url: sizedUrl })
+    assert.deepEqual(moving.rawPayload, original)
+    f.media.accessKey = 'static-source'
+    f.media.properties.communityImagePrivacy = { 'static-source': 1, 'thumbnail-key': 1 }
+    const still = await f.app.inject({ method: 'GET', url: sizedUrl })
+    assert.deepEqual(still.rawPayload, poster)
+    f.media.accessKey = 'original-key'; f.media.properties.communityImagePrivacy['original-key'] = 1
   } finally {
     gate.resolve(); await Promise.all(queued); mocked.mock.restore()
   }
@@ -489,7 +548,7 @@ test('Fastify keeps JSON errors, same-origin writes, guest session and logout co
   const { app, queries } = await fixture(t)
   const anonymous = await app.inject({ method: 'GET', url: '/api/session' })
   assert.equal(anonymous.statusCode, 200)
-  assert.deepEqual(anonymous.json(), { user: null, authentication: 'zhangyu', accountUrl: 'https://zhangyuapi.com' })
+  assert.deepEqual(anonymous.json(), { user: null, authentication: 'zhangyu', accountUrl: 'https://zhangyuapi.com', accountSyncRequired: false })
   assert.match(anonymous.headers['cache-control'], /no-store/)
   const registration = await app.inject({ method: 'GET', url: '/api/registration' })
   assert.equal(registration.statusCode, 200)
