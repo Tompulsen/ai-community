@@ -293,26 +293,41 @@ export async function start(): Promise<FastifyInstance> {
   const redis = new Redis({ host: source.host, port: source.port || 6379, password: source.pass, username: source.username, db: source.db || 0, keyPrefix: `${source.prefix ?? new URL(config.url).host}:`, maxRetriesPerRequest: 1, connectTimeout: 8000 })
   db.on('error', () => console.error('Database connection interrupted'))
   redis.on('error', () => console.error('Redis connection interrupted'))
-  await Promise.all([db.query('SELECT 1'), redis.ping()])
-  await checkRequestSchema(db)
-  const app = createApplication({ db, redis, config, filesRoot: process.env.FILES_ROOT || '/app/files' })
-  const stopWorker = process.env.DISABLE_LOTTERY_WORKER === '1' ? () => {} : startPendingWorker({ db, config, newId })
-  const stopMaintenance = process.env.DISABLE_LOTTERY_WORKER === '1' ? async () => {} : startMaintenanceWorker({ db, config, newId })
-  const stopMedia = process.env.DISABLE_MEDIA_WORKER === '1' ? async () => {} : startMediaWorker({ db, filesRoot: process.env.FILES_ROOT || '/app/files' })
-  const stopCreation = startCreationWorker(redis, db, process.env.FILES_ROOT || '/app/files')
-  app.addHook('preClose', async () => { stopAcceptingCreations(redis); stopCreation() })
-  app.addHook('onClose', async () => {
-    stopWorker()
-    await stopMaintenance()
-    stopCreation()
-    await drainCreations(redis)
-    await stopMedia()
-    await Promise.allSettled([db.end(), redis.quit()])
-  })
-  await app.listen({ port: Number(process.env.PORT || 3000), host: process.env.HOST || '0.0.0.0' })
+  const filesRoot = process.env.FILES_ROOT || '/app/files'
+  const closeResources = async () => {
+    await Promise.allSettled([db.end(), redis.quit().finally(() => redis.disconnect())])
+  }
+  let app: FastifyInstance | undefined
+  try {
+    await Promise.all([db.query('SELECT 1'), redis.ping()])
+    await checkRequestSchema(db)
+    app = createApplication({ db, redis, config, filesRoot })
+    let stopWorker = () => {}, stopMaintenance = async () => {}, stopMedia = async () => {}, stopCreation = () => {}
+    app.addHook('preClose', async () => { stopAcceptingCreations(redis); stopCreation() })
+    app.addHook('onClose', async () => {
+      stopWorker()
+      try {
+        await stopMaintenance()
+        stopCreation()
+        await drainCreations(redis)
+        await stopMedia()
+      } finally { await closeResources() }
+    })
+    if (process.env.DISABLE_LOTTERY_WORKER !== '1') {
+      stopWorker = startPendingWorker({ db, config, newId })
+      stopMaintenance = startMaintenanceWorker({ db, config, newId })
+    }
+    if (process.env.DISABLE_MEDIA_WORKER !== '1') stopMedia = startMediaWorker({ db, filesRoot })
+    stopCreation = startCreationWorker(redis, db, filesRoot)
+    await app.listen({ port: Number(process.env.PORT || 3000), host: process.env.HOST || '0.0.0.0' })
+  } catch (error) {
+    if (app) await app.close().catch(() => {})
+    else await closeResources()
+    throw error
+  }
   console.log(JSON.stringify({ status: 'listening', port: app.server.address(), backend: 'community-next', framework: 'fastify' }))
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
-    void app.close().catch(() => { process.exitCode = 1 })
+    void app!.close().catch(() => { process.exitCode = 1 })
   })
   return app
 }

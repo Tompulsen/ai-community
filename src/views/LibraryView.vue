@@ -7,7 +7,7 @@ import BentoGrid from '../components/BentoGrid.vue'
 import WorkEditor from '../components/WorkEditor.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
 import { kindLabels, statusLabels, type Work } from '../data'
-import { api, errorMessage, filterWorks, loadSession, notify, queryString, session } from '../state'
+import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
 
 const route = useRoute()
 const tabs = [{ value: 'all', label: '全部作品' }, { value: 'draft', label: '草稿' }, { value: 'pending', label: '待审核' }, { value: 'published', label: '已公开' }, { value: 'rejected', label: '未通过' }, { value: 'saved', label: '我的收藏' }]
@@ -15,7 +15,7 @@ const tab = computed(() => typeof route.query.tab === 'string' && tabs.some(item
 const query = ref('')
 const view = ref<'grid' | 'list'>('grid')
 const works = ref<Work[]>([])
-const filtered = computed(() => filterWorks(works.value.filter(work => tab.value !== 'saved' || work.saved), 'all', query.value))
+const filtered = computed(() => tab.value === 'saved' ? works.value.filter(work => work.saved) : works.value)
 const publishLink = computed(() => ({ path: '/library', query: { ...route.query, publish: '1' } }))
 const editing = ref(false)
 const deleteDialog = ref<HTMLDialogElement>()
@@ -24,22 +24,34 @@ const error = ref('')
 const formError = ref('')
 const loading = ref(false)
 const saving = ref(false)
-let loadId = 0
+let controller: AbortController | undefined
 const nextCursor = ref<string | null>(null)
 
 async function load(append = false) {
-  const current = ++loadId
+  if (append && (loading.value || !nextCursor.value)) return
+  controller?.abort()
+  const request = new AbortController()
+  controller = request
   loading.value = true
   error.value = ''
-  await loadSession()
-  if (!session.user) { works.value = []; loading.value = false; return }
   try {
-    const result = await api<{ items: Work[]; nextCursor?: string | null }>(`/api/library${queryString({ status: tab.value === 'all' ? undefined : tab.value, cursor: append ? nextCursor.value || undefined : undefined })}`)
-    if (current === loadId) { works.value = append ? [...works.value, ...result.items] : result.items; nextCursor.value = result.nextCursor || null }
-  } catch (cause) { if (current === loadId) error.value = errorMessage(cause) }
-  finally { if (current === loadId) loading.value = false }
+    await loadSession()
+    if (request.signal.aborted || !session.user) return
+    const params = queryString({ status: tab.value === 'all' ? undefined : tab.value, q: query.value.trim(), cursor: append ? nextCursor.value || undefined : undefined })
+    const result = await api<{ items: Work[]; nextCursor?: string | null }>(`/api/library${params}`, { signal: request.signal })
+    if (request.signal.aborted) return
+    works.value = append ? [...works.value, ...result.items] : result.items
+    nextCursor.value = result.nextCursor || null
+  } catch (cause) { if (!request.signal.aborted) error.value = errorMessage(cause) }
+  finally { if (!request.signal.aborted) loading.value = false }
 }
-watch(tab, () => { void load() }, { immediate: true })
+watch([tab, () => query.value.trim()], ([scope, keyword], [previousScope], onCleanup) => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => { clearTimeout(timer); controller?.abort() })
+  works.value = []; nextCursor.value = null; loading.value = true; error.value = ''
+  if (keyword && scope === previousScope) timer = setTimeout(() => { void load() }, 180)
+  else void load()
+}, { immediate: true })
 function edit(work: Work) { selected.value = work; formError.value = ''; editing.value = true }
 function confirmDelete(work: Work) { selected.value = work; formError.value = ''; deleteDialog.value?.showModal() }
 function saved(work: Work) { const existing = works.value.find(item => item.id === work.id); if (existing) Object.assign(existing, work); void load() }
@@ -62,7 +74,7 @@ async function deleteSelected() {
     <div v-if="!session.user && session.ready" class="empty-state"><Images :size="30" /><h2>登录后查看我的作品</h2><RouterLink to="/account" class="button primary btn">登录</RouterLink></div>
     <template v-else>
       <div class="tabs" aria-label="作品分类"><RouterLink v-for="item in tabs" :key="item.value" :to="{ path: '/library', query: { ...route.query, tab: item.value } }" class="tab" :class="{ active: tab === item.value }" :aria-current="tab === item.value ? 'page' : undefined"><Bookmark v-if="item.value === 'saved'" :size="15" />{{ item.label }}</RouterLink></div>
-      <div class="page-toolbar library-toolbar"><div class="search-control"><Search :size="17" /><input v-model="query" class="control" type="search" placeholder="搜索作品、标签或内容" aria-label="搜索我的作品" /><button v-if="query" class="icon-button" aria-label="清空搜索" @click="query = ''"><X :size="16" /></button></div><div class="library-view-controls"><span class="caption-5 muted" role="status">{{ filtered.length }} 件{{ tab === 'saved' ? '收藏' : '作品' }}</span><div class="view-switch" role="group" aria-label="显示方式"><button class="icon-button" :class="{ active: view === 'grid' }" :aria-pressed="view === 'grid'" aria-label="网格视图" title="网格视图" @click="view = 'grid'"><LayoutGrid :size="18" /></button><button class="icon-button" :class="{ active: view === 'list' }" :aria-pressed="view === 'list'" aria-label="列表视图" title="列表视图" @click="view = 'list'"><List :size="19" /></button></div></div></div>
+      <div class="page-toolbar library-toolbar"><div class="search-control"><Search :size="17" /><input v-model="query" class="control" type="search" maxlength="200" placeholder="搜索作品、标签或内容" aria-label="搜索我的作品" /><button v-if="query" class="icon-button" aria-label="清空搜索" @click="query = ''"><X :size="16" /></button></div><div class="library-view-controls"><span v-if="!loading && !error" class="caption-5 muted" role="status">{{ nextCursor ? '已显示 ' : '' }}{{ filtered.length }} 件{{ tab === 'saved' ? '收藏' : '作品' }}</span><div class="view-switch" role="group" aria-label="显示方式"><button class="icon-button" :class="{ active: view === 'grid' }" :aria-pressed="view === 'grid'" aria-label="网格视图" title="网格视图" @click="view = 'grid'"><LayoutGrid :size="18" /></button><button class="icon-button" :class="{ active: view === 'list' }" :aria-pressed="view === 'list'" aria-label="列表视图" title="列表视图" @click="view = 'list'"><List :size="19" /></button></div></div></div>
       <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load()">重试</button></p>
       <ContentSkeleton v-if="loading" :layout="view === 'grid' ? 'works' : 'rows'" label="正在加载作品…" />
       <BentoGrid v-else-if="filtered.length && view === 'grid'" class="library-grid"><WorkCard v-for="(work, index) in filtered" :key="work.id" :work="work" :management="work.owned" :eager="index < 3"><template #actions><div v-if="work.owned" class="work-management-actions"><button class="button subtle btn" :aria-label="`编辑作品：${work.title}`" @click="edit(work)"><Pencil :size="14" />编辑</button><button class="icon-button" :aria-label="`删除作品：${work.title}`" title="删除作品" @click="confirmDelete(work)"><Trash2 :size="15" /></button></div></template></WorkCard></BentoGrid>

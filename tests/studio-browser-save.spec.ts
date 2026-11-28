@@ -263,7 +263,7 @@ test('persistent network failure offers image retry without an unbounded native 
   expect(state.generations).toBe(1)
 })
 
-test('a recovered legacy request switches to its upstream task and saves the original after reload', async ({ page }) => {
+test('manually checking a legacy request after reload saves the original through the unified endpoint', async ({ page }) => {
   const { state, image } = await fixture(page)
   let requestId = '', recoveries = 0, taskReads = 0
   await page.route('**/api/creation/generate', route => {
@@ -289,6 +289,9 @@ test('a recovered legacy request switches to its upstream task and saves the ori
   await send(page)
   await expect.poll(() => recoveries).toBe(1)
   await page.reload()
+  await expect(page.locator('.task-status')).toContainText('已停止等待')
+  expect(recoveries).toBe(1)
+  await page.getByRole('button', { name: '查询原结果', exact: true }).click()
   await expect.poll(() => recoveries).toBe(2)
   await expect.poll(() => taskReads, { timeout: 10000 }).toBe(1)
   await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')

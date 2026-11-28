@@ -35,7 +35,7 @@ async function fixture(accepted: Record<string, unknown> = {}) {
 const finalResult = (requestId: string) => ({ status: 'succeeded', requestId,
   outputs: [{ url: `/api/creation/media?requestId=${requestId}&index=0` }] })
 
-it('keeps a missing request uncertain and restores its real result without generating again', async () => {
+it('keeps a missing request uncertain until a manual check finds its real result', async () => {
   const p = await fixture()
   const task = await p.submitCreation(p.input)
   expect(task).toMatchObject({ phase: 'attention', errorStatus: 404 })
@@ -48,7 +48,10 @@ it('keeps a missing request uncertain and restores its real result without gener
   p.api.mockResolvedValueOnce(finalResult(task.id))
   session.user = user
   await p.initializeCreation()
-  await vi.waitFor(() => expect(p.creation.tasks[0]).toMatchObject({ id: task.id, phase: 'complete', error: '' }))
+  expect(p.api).toHaveBeenCalledTimes(1)
+  expect(p.creation.tasks[0]).toMatchObject({ id: task.id, phase: 'attention' })
+  await p.resumeCreation(p.creation.tasks[0]!)
+  expect(p.creation.tasks[0]).toMatchObject({ id: task.id, phase: 'complete', error: '' })
   expect(p.api).toHaveBeenCalledTimes(2)
   expect(p.send).toHaveBeenCalledTimes(1)
 })

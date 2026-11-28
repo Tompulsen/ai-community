@@ -4,7 +4,7 @@ import { computed, ref, watch } from 'vue'
 import { previewImageUrl } from '../image-download'
 import type { WorkSummary } from '../data'
 import { statusLabels } from '../data'
-import { pendingActions, toggleWork } from '../state'
+import { pendingActions, sessionStatus, toggleWork } from '../state'
 const props = defineProps<{ work: WorkSummary; management?: boolean; eager?: boolean; priority?: boolean; thumbnailOnly?: boolean }>()
 const cover = computed(() => previewImageUrl(props.work.cover || '', props.thumbnailOnly ? 256 : 498, 'cover'))
 const coverSources = computed(() => {
@@ -50,7 +50,10 @@ function measureCover(event: Event) {
       <span v-if="work.kind === 'video'" class="video-badge"><Play :size="12" fill="currentColor" /> {{ work.duration || '视频' }}</span>
       <span v-if="management" class="cover-status" :class="work.status">{{ work.revisionPending ? '修改待审核' : statusLabels[work.status] }}</span>
     </RouterLink>
-    <button v-if="!thumbnailOnly" class="save-work icon-button" :class="{ selected: work.saved }" :aria-label="`${work.saved ? '取消收藏' : '收藏'}：${work.title}`" :aria-pressed="work.saved" :title="work.saved ? '取消收藏' : '收藏作品'" :disabled="pendingActions.has(`saved:${work.id}`)" @click="toggleWork(work, 'saved')"><Bookmark :size="17" :fill="work.saved ? 'currentColor' : 'none'" /></button>
+    <template v-if="!thumbnailOnly">
+      <RouterLink v-if="sessionStatus === 'guest'" class="save-work icon-button" :to="{ path: '/account', query: { returnTo: `/work/${work.id}` } }" :aria-label="`登录后收藏：${work.title}`" title="登录后收藏"><Bookmark :size="17" /></RouterLink>
+      <button v-else class="save-work icon-button" :class="{ selected: work.saved }" :aria-label="`${work.saved ? '取消收藏' : '收藏'}：${work.title}`" :aria-pressed="work.saved" :title="work.saved ? '取消收藏' : '收藏作品'" :disabled="sessionStatus !== 'authenticated' || pendingActions.has(`saved:${work.id}`)" @click="toggleWork(work, 'saved')"><Bookmark :size="17" :fill="work.saved ? 'currentColor' : 'none'" /></button>
+    </template>
     <div v-if="!thumbnailOnly" class="work-information">
       <RouterLink :to="`/work/${work.id}`" class="work-title title-4" :title="work.title">{{ work.title }}</RouterLink>
       <div class="work-meta">

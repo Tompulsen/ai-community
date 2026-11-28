@@ -2,7 +2,7 @@
 import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import { ArrowLeft, ChevronRight, Bookmark, Copy, Download, Eye, Flag, Heart, ImagePlus, MessageSquare, Repeat2, RotateCw, Send, Trash2, WandSparkles, X } from '@lucide/vue'
-import { api, errorMessage, notify, pendingActions, queryString, safeExternalUrl, session, toggleWork } from '../state'
+import { api, errorMessage, notify, pendingActions, queryString, safeExternalUrl, session, sessionStatus, toggleWork } from '../state'
 import { kindLabels, type Creator, type Work, type WorkComment, type WorkFile } from '../data'
 import RelatedWorks from '../components/RelatedWorks.vue'
 import FollowButton from '../components/FollowButton.vue'
@@ -227,7 +227,8 @@ async function share() {
             <button class="icon-button" aria-label="通过私信分享作品" title="私信分享" @click="openShare"><Send :size="20" /></button>
             <button class="icon-button" :aria-label="`转发作品，${work.renotesCount || 0} 次转发`" :aria-pressed="!!work.renoted" :disabled="reposting" title="转发作品" @click="repost"><Repeat2 :size="20" /></button>
             <button v-if="session.user" class="icon-button" aria-label="举报作品" title="举报作品" @click="openReport()"><Flag :size="18" /></button>
-            <button class="button btn subtle save-detail" :aria-pressed="work.saved" :disabled="pendingActions.has(`saved:${work.id}`)" @click="toggleWork(work, 'saved')"><Bookmark :size="17" :fill="work.saved ? 'currentColor' : 'none'" />{{ work.saved ? '已收藏' : '收藏' }}</button>
+            <RouterLink v-if="sessionStatus === 'guest'" class="button btn subtle save-detail" :to="{ path: '/account', query: { returnTo: `/work/${work.id}` } }" aria-label="登录后收藏" title="登录后收藏"><Bookmark :size="17" />收藏</RouterLink>
+            <button v-else class="button btn subtle save-detail" :aria-pressed="work.saved" :disabled="sessionStatus !== 'authenticated' || pendingActions.has(`saved:${work.id}`)" @click="toggleWork(work, 'saved')"><Bookmark :size="17" :fill="work.saved ? 'currentColor' : 'none'" />{{ work.saved ? '已收藏' : '收藏' }}</button>
           </div>
           <Teleport to="#mobile-work-comment-entry" :disabled="!mobile" defer>
           <div v-if="['published', 'approved'].includes(work.status)" class="detail-comment-entry">

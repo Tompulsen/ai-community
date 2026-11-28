@@ -4,7 +4,7 @@ import AxeBuilder from '@axe-core/playwright'
 import sharp from 'sharp'
 import { readFile } from 'node:fs/promises'
 import type { Work, WorkComment } from '../src/data'
-import { mockUnifiedAccount } from './helpers/account-fixture'
+import { fillAccountLogin, mockUnifiedAccount } from './helpers/account-fixture'
 
 const portrait = { id: 'portrait', name: 'portrait.png', type: 'image/png', url: '/assets/__detail/portrait.svg' }
 const landscape = { id: 'landscape', name: 'landscape.png', type: 'image/png', url: '/assets/__detail/landscape.svg' }
@@ -576,14 +576,31 @@ test('related links load another work and browser back restores the original det
 test('resource content and guest login work when recommendations fail', async ({ page }) => {
   const state = await fixture(page, { ...work, kind: 'resource', cover: '', files: [], body: '资源正文\n'.repeat(100) }, false)
   state.failRelated = true
+  const saves: boolean[] = []
+  await page.route('**/api/works/detailwork/save', route => {
+    const { active } = route.request().postDataJSON()
+    saves.push(active)
+    return route.fulfill({ json: { work: { ...work, saved: active } } })
+  })
   await page.goto('/work/detailwork')
   await expect(page.locator('.resource-article')).toContainText('资源正文')
   await expect(page.getByRole('link', { name: '登录后发表评论' })).toHaveAttribute('href', '/account?returnTo=/work/detailwork')
   await expect(page.getByRole('button', { name: '制作同款' })).toHaveAttribute('aria-haspopup', 'dialog')
   await expect(page.locator('.related-works')).toContainText('同类作品暂时无法加载。')
   await expect(page.getByRole('button', { name: '重试加载', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '收藏', exact: true }).click()
-  await expect(page.getByRole('status').filter({ hasText: '请先登录' })).toBeVisible()
+  await page.getByRole('link', { name: '登录后收藏', exact: true }).click()
+  await expect(page).toHaveURL(url => url.pathname === '/account' && url.searchParams.get('returnTo') === '/work/detailwork')
+  await fillAccountLogin(page)
+  await expect(page).toHaveURL('/work/detailwork')
+  const bookmark = page.getByRole('button', { name: '收藏', exact: true })
+  await expect(bookmark).toHaveAttribute('aria-pressed', 'false')
+  expect(saves).toEqual([])
+  await bookmark.click()
+  const saved = page.getByRole('button', { name: '已收藏', exact: true })
+  await expect(saved).toHaveAttribute('aria-pressed', 'true')
+  await saved.click()
+  await expect(bookmark).toHaveAttribute('aria-pressed', 'false')
+  expect(saves).toEqual([true, false])
 })
 
 test('detail controls and both themes remain accessible on desktop and mobile', async ({ page }) => {
