@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { CreationInput } from './native-studio'
+import { mockStudioTaskStorage } from './studio-task-test-fixture'
 
 beforeEach(() => {
   vi.resetModules()
+  mockStudioTaskStorage()
   vi.doMock('./state', async () => {
     const { reactive } = await import('vue')
     return { session: reactive({ user: null as any, csrfToken: 'fixture' }), errorMessage: (error: Error) => error.message,
@@ -45,6 +47,8 @@ it('keeps a missing request uncertain and restores its real result without gener
   const user = session.user
   session.user = null
   await (await import('vue')).nextTick()
+  localStorage.setItem('octopus:user-fixture-owner:native-creation-history:v2-fallback', JSON.stringify(
+    await (await import('./studio-task-store')).readTaskSnapshot('fixture-owner')))
   p.api.mockResolvedValueOnce(finalResult(task.id))
   session.user = user
   await p.initializeCreation()

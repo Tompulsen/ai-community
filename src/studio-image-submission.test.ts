@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { CreationInput, CreationTask } from './native-studio'
+import { mockStudioTaskStorage } from './studio-task-test-fixture'
 
 beforeEach(() => {
   vi.resetModules()
@@ -7,6 +8,7 @@ beforeEach(() => {
     const { reactive } = await import('vue')
     return { session: reactive({ user: null as any, csrfToken: 'fixture' }), errorMessage: (error: Error) => error.message, api: vi.fn(), accountApi: vi.fn(), notify: vi.fn(), uploadFile: vi.fn() }
   })
+  mockStudioTaskStorage()
   const values = new Map<string, string>()
   vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) || null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) })
 })
@@ -286,7 +288,9 @@ it('sends a large pinned image once through the Images API without losing origin
   expect(new TextEncoder().encode(serialized).byteLength).toBeLessThan(27 * 1024 ** 2)
   expect(body.referenceUrls).toEqual([original])
   expect(body.imageContext.turns).toEqual([{ prompt: '保留产品包装文案', images: [] }])
-  expect(task.references.map(file => file.url)).toEqual([original])
+  expect(task.references).toHaveLength(1)
+  expect(task.references[0]!.url).toMatch(/^studio-asset:reference-/)
+  expect((await p.readCreationImage(task.references[0]!.url)).size).toBe(12 * 1024 ** 2)
   expect(p.input.imageContext.turns[0]!.images).toEqual([original])
 })
 for (const apiFormat of ['images', 'chat-completions', 'gemini'] as const) it(`resolves auto model aliases without changing ${apiFormat} image roles`, async () => {
@@ -589,7 +593,7 @@ it('saves the original submission error before waiting for the first recovery re
   const pending = p.submitCreation(p.input)
   try {
     await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
-    const saved = JSON.parse(localStorage.getItem('octopus:user-fixture-owner:native-creation-history:v2-fallback')!)[0]
+    const saved = (await (await import('./studio-task-store')).readTaskSnapshot('fixture-owner'))![0]
     expect(saved).toMatchObject({ id: p.creation.tasks[0]!.id, submissionError: '提交到社区失败：Failed to fetch' })
     expect(p.send).toHaveBeenCalledTimes(1)
   } finally {

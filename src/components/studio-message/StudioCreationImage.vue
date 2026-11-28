@@ -55,7 +55,6 @@ function load(event: Event) {
 async function read(retry = false) {
   const accepted = revision, current = new AbortController()
   controller?.abort(); controller = current
-  if (/^(?:blob:|data:)/.test(props.src)) { fallback.value = props.src; return }
   retrying.value = retry
   let previewTimer: ReturnType<typeof setTimeout> | undefined
   const localPath = props.src.startsWith(location.origin + '/') ? props.src.slice(location.origin.length) : props.src
@@ -71,7 +70,7 @@ async function read(retry = false) {
     }
   }
   try {
-    const blob = await readCreationImage(props.src, current.signal, props.thumbnail)
+    const blob = await readCreationImage(props.src, current.signal, props.thumbnail ? true : 'display')
     if (current.signal.aborted || accepted !== revision) return
     if (replacement.value) URL.revokeObjectURL(replacement.value)
     replacement.value = URL.createObjectURL(blob); failed.value = false; loaded.value = false
@@ -83,12 +82,12 @@ async function read(retry = false) {
 }
 function imageFailed(event: Event) {
   if ((event.target as HTMLImageElement).getAttribute('src') !== (replacement.value || fallback.value)) return
-  forgetCreationImage(props.src, props.thumbnail); failed.value = true
+  forgetCreationImage(props.src, props.thumbnail ? true : 'display'); forgetCreationImage(props.src); failed.value = true
 }
 function retry() {
   if (retrying.value) return
   clearImage(previewReady.value)
-  forgetCreationImage(props.src, props.thumbnail); failed.value = false; loaded.value = false
+  forgetCreationImage(props.src, props.thumbnail ? true : 'display'); forgetCreationImage(props.src); failed.value = false; loaded.value = false
   return read(true)
 }
 </script>

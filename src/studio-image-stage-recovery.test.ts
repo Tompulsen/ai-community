@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { CreationInput } from './native-studio'
+import { mockStudioTaskStorage } from './studio-task-test-fixture'
 
 beforeEach(() => {
   vi.resetModules()
+  mockStudioTaskStorage()
   vi.doMock('./state', async () => {
     const { reactive } = await import('vue')
     return { session: reactive({ user: null as any, csrfToken: 'fixture' }), errorMessage: (error: Error) => error.message,

@@ -284,7 +284,7 @@ async function send(page: Page, prompt: string, turns: number) {
   if (await page.locator('.creation-response .browser-save').count()) await expect(page.locator('.creation-response .browser-save').last()).toHaveText('图片已保存到此浏览器')
 }
 
-for (const width of [390, 1440]) test(`image results display original pixels and retain original editing and downloads at ${width}px`, async ({ page }) => {
+for (const width of [390, 1440]) test(`image results use screen previews and retain original editing and downloads at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 })
   const { calls, image } = await fixture(page)
   const { default: sharp } = await import('sharp')
@@ -300,7 +300,7 @@ for (const width of [390, 1440]) test(`image results display original pixels and
   await send(page, '轻量图片预览', 1)
   const first = page.locator('.creation-response').first()
   await expect(first.locator('.creation-image-preview')).toHaveAttribute('aria-busy', 'false')
-  await expect.poll(() => first.locator('.creation-image img').evaluate((element: HTMLImageElement) => element.naturalHeight)).toBe(3840)
+  await expect.poll(() => first.locator('.creation-image img').evaluate((element: HTMLImageElement) => element.naturalHeight)).toBe(960)
   expect(reads.length).toBeGreaterThan(0)
   expect(reads.some(url => url.searchParams.get('variant') === 'preview')).toBe(false)
   expect(reads.some(url => !url.searchParams.has('variant'))).toBe(true)
@@ -353,7 +353,8 @@ test('editing the original prompt restores original attachments and reuse clears
   await response.getByRole('button', { name: '编辑图片', exact: true }).click()
   await response.getByRole('button', { name: '编辑原提问', exact: true }).click()
   await expect(page.locator('.creation-editing')).toContainText('修改提示词 · 发送后追加新图片')
-  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /^data:image\/jpeg/)
+  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /^blob:/)
+  await expect.poll(() => page.locator('.reference-list img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true)
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('原提问')
   expect(calls).toHaveLength(1)
   await response.click({ button: 'right' })

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { mockStudioTaskStorage } from './studio-task-test-fixture'
 
 beforeEach(() => {
   vi.resetModules()
+  mockStudioTaskStorage()
   vi.doMock('./state', async () => {
     const { reactive } = await import('vue')
     return { session: reactive({ user: null as any }), api: vi.fn(), accountApi: vi.fn(), errorMessage: (error: Error) => error.message, notify: vi.fn(), uploadFile: vi.fn() }

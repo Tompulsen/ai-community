@@ -20,7 +20,19 @@ function thumbnailSlot(signal: AbortSignal): Promise<() => void> {
     else { thumbnailQueue.push(start); signal.addEventListener('abort', aborted, { once: true }) }
   })
 }
-export async function imageThumbnail(input: Blob | (() => Promise<Blob>), signal: AbortSignal): Promise<Blob> {
+async function preserveAnimation(blob: Blob) {
+  if (blob.type === 'image/jpeg') return false
+  if (blob.type !== 'image/png') return true
+  const header = new Uint8Array(await blob.slice(0, 65536).arrayBuffer()), view = new DataView(header.buffer)
+  for (let offset = 8; offset + 8 <= header.length;) {
+    const type = String.fromCharCode(...header.subarray(offset + 4, offset + 8))
+    if (type === 'acTL') return true
+    if (type === 'IDAT') return false
+    offset += view.getUint32(offset) + 12
+  }
+  return true
+}
+export async function imageThumbnail(input: Blob | (() => Promise<Blob>), signal: AbortSignal, edge = 384): Promise<Blob> {
   const release = await thumbnailSlot(signal)
   let source = '', image: HTMLImageElement | undefined, canvas: HTMLCanvasElement | undefined, abort: (() => void) | undefined
   try {
@@ -29,6 +41,8 @@ export async function imageThumbnail(input: Blob | (() => Promise<Blob>), signal
     const blob = typeof input === 'function' ? await input() : input
     signal.throwIfAborted()
     if (!blob.size || !blob.type.startsWith('image/')) throw new Error('图片缩略图无法读取。')
+    if (edge > 384 && await preserveAnimation(blob)) { signal.throwIfAborted(); return blob }
+    signal.throwIfAborted()
     image = new Image(); source = URL.createObjectURL(blob)
     const cancelled = new Promise<never>((_, reject) => {
       abort = () => { image?.removeAttribute('src'); reject(signal.reason) }
@@ -36,7 +50,7 @@ export async function imageThumbnail(input: Blob | (() => Promise<Blob>), signal
     })
     image.src = source
     await Promise.race([image.decode(), cancelled]); signal.throwIfAborted()
-    const scale = Math.min(1, 384 / Math.max(image.naturalWidth, image.naturalHeight))
+    const scale = Math.min(1, edge / Math.max(image.naturalWidth, image.naturalHeight))
     canvas = document.createElement('canvas')
     canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
     canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))

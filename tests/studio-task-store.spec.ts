@@ -231,15 +231,17 @@ test('media snapshot migration preserves unknown metadata, original bytes and ow
     const saved = await store.readTaskSnapshot('17')
     const original = await store.readTaskAsset('17', saved[0].urls[0])
     const preview = await store.readTaskAsset('17', saved[0].preview)
+    const reference = await store.readTaskAsset('17', saved[0].references[0].url)
     const foreign = await store.readTaskAsset('18', saved[0].urls[0])
     const other = await store.readTaskSnapshot('18')
-    return { missing: missing === undefined, saved, original: await original?.text(), preview: await preview?.text(),
+    return { missing: missing === undefined, saved, original: await original?.text(), preview: await preview?.text(), reference: await reference?.text(),
       foreign: foreign === undefined, other: other === undefined, unchanged: task.urls[0] === image && task.preview === image }
   })
   expect(result.missing).toBe(true)
   expect(result.saved[0]).toMatchObject({ prompt: 'original prompt', urls: ['studio-asset:one:0'], preview: 'studio-asset:one:preview',
     request: { seed: '42' }, opaqueFutureField: { keep: [1, 2, 3] } })
-  expect(result.saved[0].references[0].url.startsWith('data:')).toBe(true)
+  expect(result.saved[0].references[0].url.startsWith('studio-asset:reference-')).toBe(true)
+  expect(result.reference).toBe('original bytes')
   expect(result.saved[0].publications.community.work.original.startsWith('data:')).toBe(true)
   expect(result.original).toBe('original bytes')
   expect(result.preview).toBe('original bytes')

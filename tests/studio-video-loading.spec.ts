@@ -33,6 +33,7 @@ test('a newly generated video reserves a usable player while metadata is delayed
     })
   })
   try {
+    await answer.getByRole('button', { name: '播放生成视频 1', exact: true }).click()
     const video = answer.locator('video')
     await expect(video).toBeVisible()
     const bounds = await video.boundingBox()
@@ -53,6 +54,8 @@ test('a failed video load offers media-only retry and recovers without generatin
         : route.fulfill({ contentType: 'video/mp4', body: bytes })
     })
   })
+  expect(reads).toBe(0)
+  await answer.getByRole('button', { name: '播放生成视频 1', exact: true }).click()
   await expect(answer.getByRole('button', { name: '重新加载视频', exact: true })).toBeVisible()
   await answer.getByRole('button', { name: '重新加载视频', exact: true }).click()
   await expect.poll(() => answer.locator('video').evaluate((video: HTMLVideoElement) => video.readyState)).toBeGreaterThanOrEqual(2)
@@ -63,19 +66,42 @@ test('a failed video load offers media-only retry and recovers without generatin
 
 test('video playback remains usable when the browser media database is unavailable', async ({ page }) => {
   const bytes = await readFile('tests/fixtures/poster-black-intro.mp4')
-  await page.addInitScript(() => {
+  const { answer, generations } = await fixture(page, async page => {
+    await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'video/mp4', body: bytes }))
+  })
+  await page.evaluate(() => {
     const open = indexedDB.open.bind(indexedDB)
     indexedDB.open = (name, version) => {
       if (name === 'community-studio-media') throw new DOMException('Media storage unavailable', 'SecurityError')
       return open(name, version)
     }
   })
-  const { answer, generations } = await fixture(page, async page => {
-    await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'video/mp4', body: bytes }))
-  })
+  await answer.getByRole('button', { name: '播放生成视频 1', exact: true }).click()
   await expect.poll(() => answer.locator('video').evaluate((video: HTMLVideoElement) => video.readyState)).toBeGreaterThanOrEqual(2)
   await answer.locator('video').evaluate((video: HTMLVideoElement) => video.play())
   await expect.poll(() => answer.locator('video').evaluate((video: HTMLVideoElement) => video.currentTime)).toBeGreaterThan(0)
+  expect(generations()).toBe(1)
+})
+
+test('offscreen videos release their source and continue from the saved position on demand', async ({ page }) => {
+  const bytes = await readFile('tests/fixtures/poster-black-intro.mp4')
+  let reads = 0
+  const { answer, generations } = await fixture(page, async page => {
+    await page.route('**/api/creation/media**', route => { reads++; return route.fulfill({ contentType: 'video/mp4', body: bytes }) })
+  })
+  const video = answer.locator('video'), player = answer.locator('.inline-video')
+  expect(reads).toBe(0)
+  await expect(video).not.toHaveAttribute('src', /./)
+  await answer.getByRole('button', { name: '播放生成视频 1', exact: true }).click()
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2)
+  await video.evaluate((v: HTMLVideoElement) => { v.pause(); v.currentTime = Math.min(1, v.duration / 2) })
+  const position = await video.evaluate((v: HTMLVideoElement) => v.currentTime)
+  await player.evaluate(element => { (element as HTMLElement).style.transform = 'translateY(-10000px)' })
+  await expect(video).not.toHaveAttribute('src', /./)
+  expect(await video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true)
+  await player.evaluate(element => { (element as HTMLElement).style.transform = '' })
+  await answer.getByRole('button', { name: '播放生成视频 1', exact: true }).click()
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThanOrEqual(position)
   expect(generations()).toBe(1)
 })
 
@@ -88,6 +114,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     const { answer } = await fixture(page, async page => {
       await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'video/mp4', body: bytes }))
     })
+    await answer.getByRole('button', { name: '播放生成视频 1', exact: true }).click()
     const video = answer.locator('video')
     await expect.poll(() => video.evaluate((video: HTMLVideoElement) => video.readyState)).toBeGreaterThanOrEqual(2)
     await video.scrollIntoViewIfNeeded()

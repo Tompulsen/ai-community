@@ -36,6 +36,7 @@ import StudioMaterialStatus from './studio-message/StudioMaterialStatus.vue'
 import StudioMessageFrame from './studio-message/StudioMessageFrame.vue'
 import StudioMediaPreview from './studio-message/StudioMediaPreview.vue'
 import StudioMediaTurn from './studio-message/StudioMediaTurn.vue'
+import StudioInlineVideo from './studio-message/StudioInlineVideo.vue'
 import StudioMessageActions, { type MessageAction } from './studio-message/StudioMessageActions.vue'
 import { togglePinnedMessage } from '../native-chat'
 import StudioContextMenu, { type StudioMenuAction } from './studio-message/StudioContextMenu.vue'
@@ -539,7 +540,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
           <Suspense v-else-if="message.role === 'assistant'"><StudioMarkdown class="message-content" :content="messageText(message)" :streaming="pending(message)" :sources="message.sources" @render="followOutput" /><template #fallback><div class="message-content"><p class="markdown-loading">{{ messageText(message) }}</p><button v-if="markdownRetry" type="button" class="icon-button" title="重新加载正文" aria-label="重新加载正文" @click="markdownRetry?.()"><RefreshCw :size="16" /></button></div></template></Suspense><p v-else class="user-text message-bubble">{{ messageText(message) }}</p>
           <div v-if="Array.isArray(message.content)" class="message-attachments"><template v-for="(part, index) in message.content" :key="index">
             <button v-if="part.type === 'image_url' && mediaUrl(part.image_url?.url, 'image')" class="attachment-image" type="button" title="放大图片" aria-label="放大图片附件" @click="openAttachment(mediaUrl(part.image_url?.url, 'image'))"><img :src="mediaUrl(part.image_url?.url, 'image')" alt="图片附件" loading="lazy" /></button>
-            <div v-else-if="part.type === 'video_url' && mediaUrl(part.video_url?.url, 'video')" class="attachment-video"><video :src="mediaUrl(part.video_url?.url, 'video')" controls playsinline preload="metadata" aria-label="视频附件" /><button class="icon-button attachment-expand" type="button" title="放大视频附件" aria-label="放大视频附件" @click="openAttachment(mediaUrl(part.video_url?.url, 'video'), 'video')"><Maximize :size="17" /></button></div>
+            <div v-else-if="part.type === 'video_url' && mediaUrl(part.video_url?.url, 'video')" class="attachment-video"><StudioInlineVideo :src="mediaUrl(part.video_url?.url, 'video')!" label="视频附件" /><button class="icon-button attachment-expand" type="button" title="放大视频附件" aria-label="放大视频附件" @click="openAttachment(mediaUrl(part.video_url?.url, 'video'), 'video')"><Maximize :size="17" /></button></div>
             <audio v-else-if="part.type === 'input_audio' && part.input_audio && audioUrl(part.input_audio)" :src="audioUrl(part.input_audio)" controls preload="none" aria-label="音频附件" />
             <span v-else-if="part.type !== 'text'">{{ part.file?.filename || (part.type === 'video_url' ? '视频附件' : part.type === 'image_url' ? '图片附件无法显示' : '音频附件') }}</span>
           </template></div>
@@ -626,6 +627,6 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
 .chat-composer > .message-quote { margin: 0 8px 8px; max-height: 120px; overflow: auto; }
 .context-compression-notice { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
 .composer-files { padding: 0 8px; margin: 8px 0; list-style: none; display: flex; gap: 8px; flex-wrap: wrap; }.composer-files li { display: flex; gap: 8px; align-items: center; font-size: 12px; max-width: 100%; }.composer-files li span { overflow-wrap: anywhere; }.editing-state { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 12px; margin: 0 8px 8px; }
-.attachment-video { position: relative; max-width: 100%; }.attachment-expand { position: absolute; top: 8px; right: 8px; background: rgb(0 0 0 / 65%); color: white; }
+.attachment-video { position: relative; width: min(480px, 100%); max-width: 100%; }.attachment-expand { position: absolute; top: 8px; right: 8px; background: rgb(0 0 0 / 65%); color: white; }
 @media (max-width: 999px) { .chat-toolbar { display: none; }.chat-messages { padding: 16px 4px; }.message-usage { flex-basis: 100%; } }
 </style>

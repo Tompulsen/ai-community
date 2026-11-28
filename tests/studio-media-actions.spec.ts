@@ -113,6 +113,7 @@ test('a visible history record created in another tab is loaded safely and saved
     const task = { id: 'other-tab', owner: '17', kind: 'image', model: 'test', prompt: 'other tab result', phase: 'complete', protocol: 'sync', createdAt: 1,
       urls: ['https://media.example/other.png'], text: '', references: [], browserSave: { state: 'saving' }, request: { size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 } }
     studio.creation.tasks.push(task)
+    await (await import('/src/studio-task-store.ts')).saveTaskSnapshot('17', [task])
     await studio.prepareCreationHistory()
     return task
   })
@@ -314,6 +315,7 @@ test('recovering a fallback merges existing database records and preserves the o
     const studio = window.mediaTest
     const task = { id: 'fallback-record', owner: '17', kind: 'image', model: 'fixture', prompt: 'first', phase: 'complete', protocol: 'sync', createdAt: Date.now(), urls: ['https://media.example/original.png'], text: '', references: [], request: { size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 } }
     studio.creation.tasks.push(task, { ...task, id: 'newer-database-record', prompt: 'keep this database-only record' })
+    await (await import('/src/studio-task-store.ts')).saveTaskSnapshot('17', studio.creation.tasks)
     await studio.prepareCreationHistory()
     localStorage.setItem('octopus:user-17:native-creation-history:v2-fallback', JSON.stringify([{ ...task, prompt: 'fallback edit' }]))
     localStorage.setItem('octopus:user-17:native-creation-history:fallback', 'migration-backup')

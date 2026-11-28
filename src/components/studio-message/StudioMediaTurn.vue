@@ -14,6 +14,7 @@ import StudioInsufficientCredits from '../StudioInsufficientCredits.vue'
 import { isInsufficientCredits } from '../../../shared/studio/insufficient-credits'
 import StudioAiStatus from './StudioAiStatus.vue'
 import StudioCreationImage from './StudioCreationImage.vue'
+import StudioInlineVideo from './StudioInlineVideo.vue'
 import StudioBrowserSave from '../StudioBrowserSave.vue'
 import StudioContextMenu, { type StudioMenuAction } from './StudioContextMenu.vue'
 import StudioMessageActions, { type MessageAction } from './StudioMessageActions.vue'
@@ -25,16 +26,11 @@ const emit = defineEmits<{
   preview: [task: CreationTask, index: number, editor?: boolean]
 }>()
 const error = ref(''), now = ref(Date.now())
-const videoErrors = ref<Record<string, boolean>>({}), videoAttempts = ref<Record<string, number>>({})
 const videoSizes = ref<Record<string, { width: number; height: number }>>({})
-watch(() => [session.user?.id, props.task.id], () => { videoErrors.value = {}; videoAttempts.value = {}; videoSizes.value = {} })
+watch(() => [session.user?.id, props.task.id], () => { videoSizes.value = {} })
 function videoMetadata(url: string, event: Event) {
   const video = event.target as HTMLVideoElement
   if (video.videoWidth && video.videoHeight) videoSizes.value[url] = { width: video.videoWidth, height: video.videoHeight }
-}
-function retryVideo(url: string) {
-  videoErrors.value[url] = false
-  videoAttempts.value[url] = (videoAttempts.value[url] || 0) + 1
 }
 const busy = computed(() => isConversationBusy(props.conversation))
 const downloading = ref(false)
@@ -158,7 +154,7 @@ async function remove() {
       </template>
     </template>
     <template v-if="role === 'user'">
-      <div class="creation-request-body message-bubble"><p>{{ task.prompt }}</p><div v-if="task.references.length" class="sent-references"><template v-for="(file, index) in task.references" :key="file.url"><video v-if="file.type?.startsWith('video/')" :src="mediaSource(file.url, false, 'video')" :aria-label="`源视频：${file.name}`" width="240" height="135" controls playsinline preload="metadata" loading="lazy" /><audio v-else-if="file.type?.startsWith('audio/')" :src="mediaSource(file.url, false, 'video')" :aria-label="`参考音频：${file.name}`" controls preload="metadata" /><StudioCreationImage v-else :src="file.url" :alt="`参考图 ${index + 1}：${file.name}`" label="" thumbnail /></template></div></div>
+      <div class="creation-request-body message-bubble"><p>{{ task.prompt }}</p><div v-if="task.references.length" class="sent-references"><template v-for="(file, index) in task.references" :key="file.url"><StudioInlineVideo v-if="file.type?.startsWith('video/')" class="sent-video" :src="file.url" :label="`源视频：${file.name}`" /><audio v-else-if="file.type?.startsWith('audio/')" :src="mediaSource(file.url, false, 'video')" :aria-label="`参考音频：${file.name}`" controls preload="none" /><StudioCreationImage v-else :src="file.url" :alt="`参考图 ${index + 1}：${file.name}`" label="" thumbnail /></template></div></div>
       <StudioMessageActions class="creation-turn-tools message-actions" label="提问操作" :actions="actions" />
     </template>
     <template v-else>
@@ -169,8 +165,7 @@ async function remove() {
       <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview, true)" alt="生成中的预览" />
       <div v-if="task.urls.length" class="creation-media" :class="{ 'video-results': task.kind === 'video' }"><figure v-for="(url, index) in task.urls" :key="url" :style="task.kind === 'video' ? { '--video-ratio': (videoSizes[url]?.width || 640) / (videoSizes[url]?.height || 360) } : undefined">
         <template v-if="task.kind === 'video'">
-          <video :key="`${url}:${videoAttempts[url] || 0}`" :src="mediaSource(url, false, 'video')" :width="videoSizes[url]?.width || 640" :height="videoSizes[url]?.height || 360" :aria-label="`生成视频 ${index + 1}`" controls playsinline preload="metadata" @loadedmetadata="videoMetadata(url, $event)" @loadeddata="videoErrors[url] = false" @error="videoErrors[url] = true" @dblclick="emit('preview', task, index)" />
-          <div v-if="videoErrors[url]" class="video-load-error" role="status"><p>视频加载失败</p><button class="studio-tool" type="button" @click="retryVideo(url)"><RefreshCw :size="16" />重新加载视频</button></div>
+          <StudioInlineVideo :src="url" :poster="task.poster" :label="`生成视频 ${index + 1}`" @loadedmetadata="videoMetadata(url, $event)" @expand="emit('preview', task, index)" />
           <button class="icon-button video-expand" type="button" title="放大视频" aria-label="放大视频" @click="emit('preview', task, index)"><Maximize :size="17" /></button>
         </template>
         <StudioCreationImage v-else :key="`${task.owner}:${task.id}`" :src="url" :preview="task.urls.length === 1 ? task.preview : undefined" :alt="task.prompt" :label="`查看大图：预览生成图片 ${index + 1}`" editable @open="emit('preview', task, index)" @edit="emit('preview', task, index, true)" />
@@ -205,8 +200,7 @@ async function remove() {
 .video-results { --video-max-height: min(360px, 36dvh); display: flex; align-items: flex-start; flex-wrap: wrap; width: min(640px, 100%); max-width: 100%; }
 .video-results figure { width: min(100%, calc(var(--video-max-height) * var(--video-ratio))); max-width: 100%; }
 .creation-media video { width: 100%; height: auto; aspect-ratio: auto 16 / 9; max-width: 100%; max-height: var(--video-max-height); display: block; object-fit: contain; }
-.video-load-error { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; background: var(--surface-soft); color: var(--ink); font-size: 14px; }
-.video-load-error p { margin: 0; }
+.sent-video { width: 240px; max-width: 100%; }
 .creation-text pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 28px; margin: 0; max-width: 72ch; }
 @media (min-width: 1000px) { .creation-media { gap: 4px; } }
 @media (max-width: 639px) { .video-results { --video-max-height: 32dvh; } }

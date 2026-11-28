@@ -117,7 +117,10 @@ test('keyboard traversal crosses deferred messages and old edits and branches st
   await fixture(page)
   const first = page.locator('[data-message-id="answer-0"]')
   await first.getByRole('button', { name: '下一个分支', exact: true }).focus()
-  for (let step = 0; step < 70; step++) await page.keyboard.press('Tab')
+  for (let step = 0; step < 120; step++) {
+    await page.keyboard.press('Tab')
+    if (await page.evaluate(() => Number(document.activeElement?.closest<HTMLElement>('[data-message-id]')?.dataset.messageId?.split('-')[1]) > 8)) break
+  }
   const active = await page.evaluate(() => document.activeElement?.closest<HTMLElement>('[data-message-id]')?.dataset.messageId)
   expect(Number(active?.split('-')[1])).toBeGreaterThan(8)
   await first.getByRole('button', { name: '编辑回答', exact: true }).click()

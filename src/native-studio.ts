@@ -16,7 +16,8 @@ import { createGenerationProgress } from '../shared/studio/generation-progress'
 import { readRemixParameters } from '../shared/studio/remix-parameters'
 import { normalizeImageRequest, usesGeminiImageChat } from '../shared/studio/image-params'
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
-import { captureTaskSnapshot, deleteTaskRecords, imageBlob, readTaskAsset, readTaskForUpdate, readTaskPreview, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal, saveTaskPreview, taskAssetUrl } from './studio-task-store'
+import { captureTaskSnapshot, deleteTaskRecords, imageBlob, readTaskAsset, readTaskForUpdate, readTaskPreview, readTaskSnapshot, saveTaskChanges, saveReferenceImage, saveTaskOriginal, saveTaskPreview, taskAssetUrl } from './studio-task-store'
+import { createDeferredWriteQueue } from '../shared/studio/latest-write-queue'
 import { notifyBrowserStorageChanged, notifyBrowserStorageFailure } from './browser-storage'
 import { imageThumbnail } from './studio-media-previews'
 import { imageDownload, originalImageUrl } from './image-download'
@@ -170,33 +171,69 @@ function parse(value: unknown): unknown {
   if (typeof value !== 'string') return value
   try { return JSON.parse(value) } catch { return undefined }
 }
-async function persist(required = false, refreshHistory = true) {
-  if (!owner || owner !== activeOwner()) return
-  const acceptedOwner = owner, key = storeKey(), snapshot = captureTaskSnapshot(owner, creation.tasks)
-  writes = writes.catch(() => {}).then(async () => {
-    if (acceptedOwner !== activeOwner()) return
-    try {
-      await saveCapturedTaskSnapshot(acceptedOwner, snapshot)
-      if (acceptedOwner === activeOwner()) {
-        localStorage.removeItem(key + ':v2-fallback')
-        if (refreshHistory) creation.historyRevision++
-        notifyBrowserStorageChanged()
-      }
-    } catch (cause) {
-      if (acceptedOwner === activeOwner()) notifyBrowserStorageFailure(cause)
-      try { localStorage.setItem(key + ':v2-fallback', `[${[...snapshot.values()].join(',')}]`) }
-      catch {
-        if (acceptedOwner === activeOwner()) creation.storageError = '本地存储空间不足，刷新前请下载生成结果。'
-        if (required) throw new Error('无法保存任务记录，请释放浏览器存储空间后重新操作。')
+const dirtyTasks = new Map<string, CreationTask>()
+let historyDirty = false
+function reconcileSavedValue(current: unknown, saved: unknown): unknown {
+  // Publication and upload operations hold nested references across awaited saves.
+  if (Array.isArray(current) && Array.isArray(saved)) {
+    for (let index = 0; index < saved.length; index++) current[index] = reconcileSavedValue(current[index], saved[index])
+    current.length = saved.length
+    return current
+  }
+  if (record(current) && record(saved)) {
+    for (const key of Object.keys(current)) if (!(key in saved)) delete current[key]
+    for (const key of Object.keys(saved)) current[key] = reconcileSavedValue(current[key], saved[key])
+    return current
+  }
+  return saved
+}
+const writeTaskUpdates = createDeferredWriteQueue(async ({ acceptedOwner, version }: { acceptedOwner: string; version: number }) => {
+  if (version !== epoch || acceptedOwner !== activeOwner()) return
+  const pending = [...dirtyTasks.values()], refreshHistory = historyDirty
+  dirtyTasks.clear(); historyDirty = false
+  try {
+    const snapshot = captureTaskSnapshot(acceptedOwner, pending)
+    const committed = await saveTaskChanges(acceptedOwner, snapshot)
+    if (version !== epoch || acceptedOwner !== activeOwner()) return
+    for (const task of pending) {
+      const saved = committed.get(task.id), before = JSON.parse(snapshot.get(task.id)!) as CreationTask
+      if (!saved) continue
+      // Apply durable media IDs and other-tab changes without overwriting newer live edits.
+      for (const key of Object.keys({ ...before, ...saved }) as (keyof CreationTask)[]) {
+        if (JSON.stringify(before[key]) !== JSON.stringify(saved[key]) && JSON.stringify(task[key]) === JSON.stringify(before[key]))
+          Object.assign(task, { [key]: reconcileSavedValue(task[key], saved[key]) })
       }
     }
-  })
-  await writes
+    if (refreshHistory) creation.historyRevision++
+    creation.storageError = ''
+    notifyBrowserStorageChanged()
+  } catch (cause) {
+    if (version === epoch && acceptedOwner === activeOwner()) {
+      for (const task of pending) if (!dirtyTasks.has(task.id)) dirtyTasks.set(task.id, task)
+      historyDirty ||= refreshHistory
+      notifyBrowserStorageFailure(cause)
+      creation.storageError = '本地记录尚未保存成功，原数据已保留。请重试保存，刷新前请下载生成结果。'
+    }
+    throw cause
+  }
+}, 100)
+async function persist(tasks: CreationTask | readonly CreationTask[] = [], required = false, refreshHistory = true) {
+  if (!owner || owner !== activeOwner()) return
+  for (const task of Array.isArray(tasks) ? tasks : [tasks]) if (task.owner === owner) dirtyTasks.set(task.id, task)
+  historyDirty ||= refreshHistory
+  writes = writeTaskUpdates({ acceptedOwner: owner, version: epoch }, required)
+  try { await writes }
+  catch (cause) {
+    if (required) throw new Error('无法可靠保存任务，请检查浏览器存储空间后重试；本次未继续提交。', { cause })
+  }
 }
+function flushTaskUpdates() { void writeTaskUpdates.flush().catch(() => {}) }
+if (typeof window !== 'undefined') window.addEventListener?.('pagehide', flushTaskUpdates)
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushTaskUpdates() })
 export async function prepareCreationHistory() {
   await initializeCreation()
   if (!creation.loaded || owner !== activeOwner()) throw new Error(creation.storageError || '创作记录尚未加载。')
-  await persist(true)
+  await persist([], true)
 }
 export function canonicalCreationTask(task: CreationTask) {
   if (!validTask(task) || task.owner !== activeOwner()) throw new Error('生成记录不属于当前账号。')
@@ -218,7 +255,7 @@ export async function hideGalleryOutputs(items: { task: CreationTask; index: num
     return { task: canonicalCreationTask(task), index }
   })
   for (const { task, index } of pending) task.galleryHiddenIndices = [...new Set([...(task.galleryHiddenIndices || []), index])].sort((a, b) => a - b)
-  await persist(true)
+  await persist(pending.map(item => item.task), true)
 }
 function validTask(value: unknown): value is CreationTask {
   return record(value) && validId(value.id) && ['image', 'video', 'text'].includes(String(value.kind))
@@ -357,11 +394,12 @@ export async function readableMedia(url: string, kind: CreationKind, preview = f
   if (!source) throw new Error('生成文件暂时无法读取，任务记录已保留。')
   return source
 }
-function imageReadKey(url: string, preview = false) {
-  return `${epoch}:${activeOwner()}:${preview}:${/^(?:studio-asset:|legacy-gallery:)/.test(url) ? url : mediaSource(url, preview, 'image') || url}`
+type ImagePreview = boolean | 'display'
+function imageReadKey(url: string, preview: ImagePreview = false) {
+  return `${epoch}:${activeOwner()}:${preview}:${/^(?:studio-asset:|legacy-gallery:)/.test(url) ? url : mediaSource(url, preview === true, 'image') || url}`
 }
-export function forgetCreationImage(url: string, preview = false) { imageBlobs.delete(imageReadKey(url, preview)) }
-export function readCreationImage(url: string, signal: AbortSignal = new AbortController().signal, preview = false): Promise<Blob> {
+export function forgetCreationImage(url: string, preview: ImagePreview = false) { imageBlobs.delete(imageReadKey(url, preview)) }
+export function readCreationImage(url: string, signal: AbortSignal = new AbortController().signal, preview: ImagePreview = false): Promise<Blob> {
   signal.throwIfAborted()
   const key = imageReadKey(url, preview), cached = imageBlobs.get(key)
   if (cached) { imageBlobs.delete(key); imageBlobs.set(key, cached); return Promise.resolve(cached) }
@@ -393,13 +431,30 @@ export function readCreationImage(url: string, signal: AbortSignal = new AbortCo
     if (--current.readers === 0) current.controller.abort()
   })
 }
-async function loadCreationImage(url: string, signal: AbortSignal, preview = false): Promise<Blob> {
+async function loadCreationImage(url: string, signal: AbortSignal, preview: ImagePreview = false): Promise<Blob> {
   const version = epoch, accepted = activeOwner()
   const check = () => {
     signal.throwIfAborted()
     if (version !== epoch || accepted !== activeOwner()) throw new DOMException('Stopped', 'AbortError')
   }
   check()
+  if (preview === 'display') {
+    let original: Blob | undefined
+    try {
+      const asset = /^studio-asset:([A-Za-z0-9_-]+):(\d+)$/.exec(url), identity = JSON.stringify(['image', url])
+      const cached = asset ? await readTaskPreview(accepted, asset[1]!, identity, Number(asset[2]), 'display').catch(() => undefined) : undefined
+      check()
+      if (cached) return cached.blob
+      const blob = await imageThumbnail(async () => (original = await readCreationImage(url, signal)), signal, 960)
+      check()
+      if (asset) await saveTaskPreview(accepted, asset[1]!, identity, blob, undefined, Number(asset[2]), 'display').catch(() => {})
+      return blob
+    } catch (cause) {
+      check()
+      if (original) return original
+      throw cause
+    }
+  }
   // Local originals stay in IndexedDB; only the viewing component owns their object URLs.
   if (url.startsWith('studio-asset:')) {
     const [, id, index] = url.split(':'), identity = JSON.stringify(['image', url])
@@ -678,7 +733,7 @@ function monitorSubmission(task: CreationTask, controller: AbortController, vers
         if (data.requestId === task.id && data.status === 'pending') {
           applyStage(task, data)
           task.serverTracked = true
-          await persist()
+          await persist(task)
         }
       } catch (error) {
         if (monitoring.signal.aborted || epoch !== version) return
@@ -718,7 +773,7 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
         task.error = permanent ? failure : `${failure} 正在自动重试。`
       }
       if (permanent) task.settledAt = Date.now()
-      await persist()
+      await persist(task)
       let wait = 5000
       if (status === 429) {
         failures = 0
@@ -734,12 +789,12 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
     if (task.phase === 'complete' && creation.restoringTaskIds.has(task.id)) creation.recoveredTaskIds.add(task.id)
     if (!finished || task.phase === 'complete') creation.restoringTaskIds.delete(task.id)
     deadline = task.deadline ?? deadline
-    await persist()
+    await persist(task)
     if (finished) { if (task.phase === 'complete') notify('生成完成，可在创作台查看结果。'); return }
     if (Date.now() >= deadline) break
     await delay(controller.signal, 5000)
   }
-  if (epoch === version && !controller.signal.aborted) { task.phase = 'paused'; task.settledAt = Date.now(); task.error = '等待时间较长，已停止等待，任务记录已保留。'; await persist() }
+  if (epoch === version && !controller.signal.aborted) { task.phase = 'paused'; task.settledAt = Date.now(); task.error = '等待时间较长，已停止等待，任务记录已保留。'; await persist(task) }
 }
 function applyCatalogue(catalogue: ModelCatalogue) {
   creation.models = catalogue.items; creation.modelTokenId = catalogue.tokenId
@@ -871,7 +926,7 @@ export async function resumeCreation(task: CreationTask, restoring = false) {
   if (creationRequestTimedOut(task) && !task.serverTracked) return
   if (!task.upstreamId && task.legacy) return
   if (task.customApiBase) { task.phase = 'attention'; task.error = '此历史任务使用自定义接口，已保留原记录，请到原服务核对结果。'; return }
-  if (task.legacy && task.tokenId == null) { task.phase = 'attention'; task.error = '此历史任务缺少原始令牌编号，已保留记录，请先核对原任务。'; await persist(); return }
+  if (task.legacy && task.tokenId == null) { task.phase = 'attention'; task.error = '此历史任务缺少原始令牌编号，已保留记录，请先核对原任务。'; await persist(task); return }
   if (!task.upstreamId && !task.serverTracked && task.error) task.submissionError ||= task.error
   const controller = new AbortController(), version = epoch
   if (restoring) creation.restoringTaskIds.add(task.id)
@@ -883,7 +938,7 @@ export async function resumeCreation(task: CreationTask, restoring = false) {
     if (epoch === version) {
       task.phase = (task.kind === 'text' ? task.upstreamId : controller.signal.aborted) ? 'paused' : 'attention'
       task.settledAt ??= Date.now(); task.error = controller.signal.aborted ? '已停止本页等待，上游任务可能仍在执行。' : errorMessage(error)
-      await persist()
+      await persist(task)
     }
   } finally {
     if (epoch === version && controllers.get(task.id) === controller) {
@@ -897,14 +952,14 @@ export async function retryCreationSave(task: CreationTask) {
   const data = await api<unknown>(`/api/creation/requests/${encodeURIComponent(task.id)}/save`, { method: 'POST', body: {} })
   if (version !== epoch || task.owner !== activeOwner()) return
   const finished = applyResult(task, data)
-  await persist()
+  await persist(task)
   if (!finished) await resumeCreation(task)
 }
 export function stopCreation(task: CreationTask) {
   if (task.owner !== activeOwner() || !['submitting', 'running'].includes(task.phase)) return
   controllers.get(task.id)?.abort()
   task.phase = 'paused'; task.settledAt = Date.now(); task.error = '已停止本页等待，上游任务可能仍在执行。'
-  void persist()
+  void persist(task)
 }
 export function creationConversationId(task: CreationTask) { return task.conversationId || task.id }
 export function creationReferenceIssue(input: Pick<CreationInput, 'kind' | 'model' | 'apiFormat' | 'references' | 'imageContext' | 'videoOptions'>, configuredModel?: CreationModel) {
@@ -973,12 +1028,23 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   }
   const referenceIssue = creationReferenceIssue(input, configuredModel)
   if (referenceIssue) throw new Error(referenceIssue)
+  const storedReferences: CreationTask['references'] = []
+  const storedByRequest = new Map<string, CreationTask['references'][number]>()
   for (const file of input.references || []) {
     if (file.type?.startsWith('video/') || file.type?.startsWith('audio/')) {
       if (input.kind !== 'video' || !/^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(file.url)) throw new Error('视频和音频参考需要上传到当前账号。')
+      storedReferences.push({ ...file })
       continue
     }
+    let local = file.url
+    if (/^(?:data:image\/|blob:|legacy-gallery:)/.test(local)) {
+      const blob = await imageBlob(local) || await readCreationImage(local)
+      local = await saveReferenceImage(acceptedOwner, blob)
+    }
+    const stored = { ...file, url: local }
+    storedReferences.push(stored)
     file.url = await prepareImage(file.url)
+    storedByRequest.set(file.url, stored)
   }
   if (compactImageContext) input.references = [...new Map((input.references || []).map(file => [file.url, file])).values()]
   for (const turn of input.imageContext?.turns || []) {
@@ -986,13 +1052,16 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     if (turn.references) turn.references = await Promise.all(turn.references.map(prepareImage))
   }
   const id = crypto.randomUUID()
-  const body = JSON.stringify({ ...input, purpose: undefined, mediaBranch: undefined, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined, accountContractVersion: undefined,
+  let body = JSON.stringify({ ...input, purpose: undefined, mediaBranch: undefined, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined, accountContractVersion: undefined,
     ...(contractVersion === 2 ? { contractVersion: 2, group: selectedGroup } : {}),
     references: undefined, referenceUrls: (input.references || []).map(file => file.url), requestId: id })
   const requestBytes = new TextEncoder().encode(body).byteLength
   if (requestBytes > 27 * 1024 ** 2)
     throw new Error(`本次图片和上下文请求为 ${(requestBytes / 1024 ** 2).toFixed(2)} MiB，超过 27 MiB 上限。请减少参考图或取消固定内容后重试；清除上下文不会移除已固定内容。`)
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
+  portable.clear()
+  input.references = compactImageContext ? [...storedByRequest.values()] : storedReferences
+  input.imageContext = undefined
   const previous = input.conversationId && creation.tasks.find(task => task.owner === owner && task.kind === input.kind && creationConversationId(task) === input.conversationId)
   const task: CreationTask = reactive({
     ...(input.purpose === 'document' ? { purpose: 'document' as const } : {}),
@@ -1010,11 +1079,11 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       ...(input.chatOptions ? { chatOptions: JSON.parse(JSON.stringify(input.chatOptions)) } : {}) },
   })
   creation.tasks.unshift(task); creation.selectedId = task.id
-  try { await persist(true) }
+  try { await persist(task, true) }
   catch (error) { task.phase = 'error'; task.settledAt = Date.now(); task.error = errorMessage(error); throw error }
   if (epoch !== version || task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
   if (!isCurrent() || task.phase !== 'submitting') {
-    task.phase = 'error'; task.settledAt = Date.now(); task.error = '操作已停止，未向上游提交生成。'; await persist(); return task
+    task.phase = 'error'; task.settledAt = Date.now(); task.error = '操作已停止，未向上游提交生成。'; await persist(task); return task
   }
   const controller = new AbortController()
   controllers.set(task.id, controller)
@@ -1022,12 +1091,12 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   catch (error) {
     controllers.delete(task.id); task.phase = 'error'; task.settledAt = Date.now()
     task.error = `会话未能保存，未提交生成：${errorMessage(error)}`
-    await persist(); throw error
+    await persist(task); throw error
   }
   task.conversationPending = false
   if (epoch !== version || acceptedOwner !== activeOwner() || !isCurrent() || task.phase !== 'submitting') {
     controllers.delete(task.id)
-    if (epoch === version) { task.phase = 'error'; task.settledAt = Date.now(); task.error = '操作已停止，未提交生成。'; await persist() }
+    if (epoch === version) { task.phase = 'error'; task.settledAt = Date.now(); task.error = '操作已停止，未提交生成。'; await persist(task) }
     return task
   }
   let requestStarted = false, responseReceived = false, responseStatus: number | undefined
@@ -1043,7 +1112,9 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       body,
     }
     requestStarted = true
-    const response = await fetch('/api/creation/generate', options).finally(stopMonitoring)
+    const response = await fetch('/api/creation/generate', { ...options }).finally(() => {
+      stopMonitoring(); options.body = undefined; body = ''
+    })
     responseReceived = true; responseStatus = response.status
     if (!response.ok) {
       const data = await response.json().catch(() => ({}))
@@ -1086,7 +1157,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
         }
         if (event.type === 'result') data = event
         onUpdate?.(task)
-        if (Date.now() - lastSave > 2000) { lastSave = Date.now(); void persist() }
+        if (Date.now() - lastSave > 2000) { lastSave = Date.now(); void persist(task) }
       }))
       const reader = response.body.getReader()
       try {
@@ -1102,7 +1173,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     if (task.generationProgress) task.responseMetrics = {
       usage: task.usage || {}, generationDurationMs: task.generationProgress.durationMs, estimatedOutputTokens: task.generationProgress.outputTokens,
     }
-    await persist()
+    await persist(task)
     if (!finished) await poll(task, controller, version)
   } catch (error) {
     if (epoch === version) {
@@ -1126,14 +1197,14 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       else if (task.errorCode === modelBusyCode) task.error = modelBusyMessage
       if (!controller.signal.aborted && !notAccepted) {
         task.submissionError = detail
-        await persist()
+        await persist(task)
         await poll(task, controller, version).catch(() => {})
       }
     }
   } finally {
     stopMonitoring()
     if (controllers.get(task.id) === controller) controllers.delete(task.id)
-    if (epoch === version) await persist()
+    if (epoch === version) await persist(task)
   }
   return task
 }
@@ -1143,13 +1214,14 @@ export async function removeCreationTasks(ids: string[]) {
   await writes.catch(() => {})
   await deleteTaskRecords(acceptedOwner, ids)
   if (version !== epoch || acceptedOwner !== activeOwner()) return
+  for (const id of ids) dirtyTasks.delete(id)
   for (const task of creation.tasks.filter(task => selected.has(task.id) && task.owner === acceptedOwner)) {
     downloads.get(`${task.owner}:${task.id}`)?.controller.abort()
     imageSaves.get(`${task.owner}:${task.id}`)?.controller.abort()
   }
   creation.tasks = creation.tasks.filter(task => task.owner !== acceptedOwner || !selected.has(task.id))
   if (selected.has(creation.selectedId)) creation.selectedId = creation.tasks[0]?.id || ''
-  await persist(true)
+  await persist([], true)
 }
 
 async function importLegacy(version: number) {
@@ -1254,7 +1326,7 @@ export function initializeCreation() {
     }
     const fallback = parse(localStorage.getItem(key + ':v2-fallback'))
     const stored = Array.isArray(fallback)
-      ? [...new Map([...(saved || []), ...fallback.filter(validTask)].map(task => [task.id, task])).values()]
+      ? [...new Map([...(saved || []), ...fallback.filter(validTask).filter(task => task.owner === acceptedOwner)].map(task => [task.id, task])).values()]
       : saved || parse(localStorage.getItem(key + ':fallback')) || parse(await storedValue(key))
     if (version !== epoch) return
     creation.tasks = Array.isArray(stored) ? stored.filter(validTask).filter(task => task.owner === owner).map(task => ({
@@ -1268,9 +1340,18 @@ export function initializeCreation() {
     if (version !== epoch) return
     creation.loaded = true
     creation.selectedId = creation.tasks[0]?.id || ''
-    await persist()
-    for (const task of creation.tasks.filter(item => (item.upstreamId && item.phase === 'paused' || ['paused', 'attention'].includes(item.phase) && !item.legacy)
-      && !item.customApiBase && (!item.legacy || item.tokenId != null))) void resumeCreation(task, true)
+    const previous = new Map(saved?.map(task => [task.id, task]))
+    const fallbackIds = new Set(Array.isArray(fallback) ? fallback.filter(validTask).filter(task => task.owner === acceptedOwner).map(task => task.id) : [])
+    const changed = creation.tasks.filter(task => {
+      const before = previous.get(task.id)
+      return fallbackIds.has(task.id) || !before || before.phase !== task.phase || before.localSave?.state !== task.localSave?.state || before.browserSave?.state !== task.browserSave?.state
+    })
+    await persist(changed, true).catch(() => {})
+    if (Array.isArray(fallback) && !creation.storageError) localStorage.removeItem(key + ':v2-fallback')
+    const pending = creation.tasks.filter(item => (item.upstreamId && item.phase === 'paused' || ['paused', 'attention'].includes(item.phase) && !item.legacy)
+      && !item.customApiBase && (!item.legacy || item.tokenId != null))
+    // poll already limits active GETs and yields its slot between attempts.
+    for (const task of pending) void resumeCreation(task, true).catch(() => {})
   })().finally(() => { if (version === epoch) booting = undefined })
   return booting
 }
@@ -1289,7 +1370,7 @@ export function cacheCreationImages(value: CreationTask, retry = false): Promise
   }
   if (!task || task.owner !== value.owner || task.kind !== 'image' || task.phase !== 'complete' || !task.urls.length) return Promise.resolve()
   const key = `${task.owner}:${task.id}`, pending = imageSaves.get(key)
-  if (pending) return pending.promise
+  if (pending) return retry ? pending.promise.then(() => cacheCreationImages(value, true)) : pending.promise
   if (!retry && task.browserSave) return Promise.resolve()
   const version = epoch, controller = new AbortController(), signal = controller.signal
   const current = () => version === epoch && task.owner === activeOwner() && creation.tasks.includes(task) && !signal.aborted
@@ -1299,7 +1380,7 @@ export function cacheCreationImages(value: CreationTask, retry = false): Promise
     let acquired = false
     try {
       if (typeof indexedDB === 'undefined') throw new Error('此浏览器无法保存图片，请下载原图保存。')
-      await persist(true, false); check()
+      await persist(task, true, false); check()
       if (activeImageSaves >= 2) await new Promise<void>((resolve, reject) => {
         const start = () => { signal.removeEventListener('abort', abort); resolve() }
         const abort = () => {
@@ -1332,6 +1413,7 @@ export function cacheCreationImages(value: CreationTask, retry = false): Promise
       check(); task.browserSave = { state: 'saved' }
     } catch (cause) {
       if (current()) {
+        if (cause instanceof Error && cause.cause instanceof DOMException) cause = cause.cause
         if (cause instanceof DOMException && cause.name === 'QuotaExceededError') notifyBrowserStorageFailure(cause)
         task.browserSave = { state: 'failed', error: cause instanceof DOMException && cause.name === 'QuotaExceededError'
           ? '浏览器空间不足，请释放空间后重试，或下载原图保存。' : errorMessage(cause) }
@@ -1341,7 +1423,7 @@ export function cacheCreationImages(value: CreationTask, retry = false): Promise
         const next = waitingImageSaves.shift()
         if (next) next(); else activeImageSaves--
       }
-      if (current()) await persist(false, false)
+      if (current()) await persist(task, false, false)
     }
   })().finally(() => { if (imageSaves.get(key)?.controller === controller) imageSaves.delete(key) })
   imageSaves.set(key, { controller, promise })
@@ -1398,7 +1480,7 @@ export function saveCreationLocally(value: CreationTask): Promise<void> {
     let completed = Math.min(task.urls.length, Math.max(0, task.localSave?.completed || 0))
     try {
       task.localSave = { state: 'saving', completed }
-      await persist(true); check()
+      await persist(task, true); check()
       for (let index = completed; index < task.urls.length; index++) {
         const blob = task.kind === 'image' ? await readCreationImage(task.urls[index]!, controller.signal) : await (async () => {
           const source = await readableMedia(task.urls[index]!, task.kind); check()
@@ -1410,18 +1492,18 @@ export function saveCreationLocally(value: CreationTask): Promise<void> {
         urls[index] = await cacheDownloadedImage(task, index, urls[index]!, blob); check()
         // Claim the file durably before handing it to the browser, which cannot confirm completion.
         task.localSave = { state: 'saving', completed: index + 1, requestedAt: Date.now() }
-        try { await persist(true); check() }
+        try { await persist(task, true); check() }
         catch (cause) { task.localSave.completed = completed; throw cause }
         try { requestDownload(blob, creationFilename(blob, task, index)) }
         catch (cause) { task.localSave.completed = completed; throw cause }
         completed = index + 1
       }
       task.localSave = { state: 'downloadRequested', completed, requestedAt: Date.now() }
-      await persist(true)
+      await persist(task, true)
     } catch (cause) {
       if (version === epoch && task.owner === activeOwner()) {
         task.localSave = { state: 'failed', completed, error: errorMessage(cause) }
-        await persist()
+        await persist(task)
       }
       throw cause
     }
@@ -1455,7 +1537,7 @@ async function creationDownloadBlob(task: CreationTask, index: number, version: 
   checkCreationDownload(task, version, signal)
   if (task.kind === 'video' && (!blob.size || /^(text\/|application\/json)/i.test(blob.type))) throw new Error('视频文件无效，请重新加载。')
   if (image && url) {
-    if (await cacheDownloadedImage(task, index, url, image) !== url) await persist()
+    if (await cacheDownloadedImage(task, index, url, image) !== url) await persist(task)
     checkCreationDownload(task, version, signal)
   }
   const exported = task.kind === 'image' && format ? await imageDownload(blob, format, signal) : blob
@@ -1606,7 +1688,7 @@ export async function moderateCreation(task: CreationTask, retry = false, conten
     if (current()) {
       task.moderation = { ...result, checkedAt: Date.now() }
       moderationChecks.delete(key)
-      await persist()
+      await persist(task)
     }
     return result
   })()
@@ -1653,7 +1735,7 @@ async function preparePublication(task: CreationTask, title: string, destination
     ...(task.kind === 'text' ? { content: content ?? task.text, files: [] } : {}),
   }
   const files = task.kind === 'text' ? publication.files ??= [...(task.publicationFiles || [])] : task.publicationFiles ??= []
-  await persist(true); checkOwner()
+  await persist(task, true); checkOwner()
   async function uploadMedia(url: string, kind: CreationKind, name: string) {
     let blob = kind === 'image' && /^(?:studio-asset:|legacy-gallery:)/.test(url) ? await readCreationImage(url) : undefined
     if (!blob) {
@@ -1675,18 +1757,18 @@ async function preparePublication(task: CreationTask, title: string, destination
   }
   for (let index = files.length; index < task.urls.length; index++) {
     files.push(await uploadMedia(task.urls[index]!, task.kind, `creation-${index + 1}`))
-    await persist(true); checkOwner()
+    await persist(task, true); checkOwner()
   }
   if (task.kind === 'text' && !files.length) {
     const uploaded = await uploadFile(new File([publication.content ?? task.text], 'creation.md', { type: 'text/markdown' }))
-    checkOwner(); files.push(uploaded.id); await persist(true); checkOwner()
+    checkOwner(); files.push(uploaded.id); await persist(task, true); checkOwner()
   }
   if (destination === 'community') {
     task.publicationReferences ??= []
     const references = (publication.details?.referenceIndices.map(index => task.references[index]!) ?? task.references).filter(file => !file.type?.startsWith('video/') && !file.type?.startsWith('audio/'))
     for (let index = task.publicationReferences.length; index < references.length; index++) {
       task.publicationReferences.push(await uploadMedia(references[index]!.url, 'image', `reference-${index + 1}`))
-      await persist(true); checkOwner()
+      await persist(task, true); checkOwner()
     }
   }
   let result: { work: Work }
@@ -1707,11 +1789,11 @@ async function preparePublication(task: CreationTask, title: string, destination
     if (failure.code?.startsWith('WORK_MODERATION_') || failure.status === 400 && (!previous && publication.details || destination === 'community' && failure.code === 'WORK_TAGS_REQUIRED')) {
       delete task.publications[destination]
       task.publicationReferences = []
-      await persist()
+      await persist(task)
     }
     throw cause
   }
-  checkOwner(); publication.work = result.work; await persist()
+  checkOwner(); publication.work = result.work; await persist(task)
   return result
 }
 watch(() => accountIdentity(), () => {
@@ -1728,6 +1810,7 @@ watch(() => accountIdentity(), () => {
   imageBlobs.clear()
   downloads.clear()
   controllers.clear(); owner = next; booting = undefined
+  dirtyTasks.clear(); historyDirty = false
   for (const key of Object.keys(localMedia)) { if (localMedia[key]?.startsWith('blob:')) URL.revokeObjectURL(localMedia[key]); delete localMedia[key] }
   mediaLoads.clear()
   creation.tasks = []; creation.selectedId = ''; creation.loaded = false
