@@ -8,7 +8,8 @@
  import ipaddress
  import json
 @@ -69,6 +71,14 @@
- media_proxy_slots = asyncio.Semaphore(int(os.getenv("MEDIA_PROXY_STREAMS", "8")))
+-media_proxy_slots = asyncio.Semaphore(int(os.getenv("MEDIA_PROXY_STREAMS", "8")))
++media_proxy_slots = asyncio.Semaphore(int(os.getenv("MEDIA_PROXY_STREAMS", "200")))
  edit_upload_slots = asyncio.Semaphore(int(os.getenv("EDIT_UPLOAD_SLOTS", "4")))
  json_input_slots = asyncio.Semaphore(int(os.getenv("JSON_INPUT_SLOTS", "2")))
 +

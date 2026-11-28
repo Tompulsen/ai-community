@@ -8,7 +8,7 @@ const waiting: (() => void)[] = []
 
 export async function acquireImageRead(signal: AbortSignal) {
   signal.throwIfAborted()
-  if (active < 2) { active++; return }
+  if (active < 4) { active++; return }
   if (waiting.length >= 14) throw httpError(503, '图片读取繁忙，请稍后重试。')
   await new Promise<void>((resolve, reject) => {
     const start = () => {

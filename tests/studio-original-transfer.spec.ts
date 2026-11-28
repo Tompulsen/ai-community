@@ -29,7 +29,12 @@ async function send(page: Page) {
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('完整保存并预览原图')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
-  await expect(page.locator('.creation-image-preview')).toBeVisible()
+}
+
+async function openGalleryPreview(page: Page) {
+  await page.getByRole('button', { name: '作品库', exact: true }).click()
+  await page.getByRole('button', { name: '预览 完整保存并预览原图', exact: true }).click()
+  return page.getByRole('dialog', { name: '原始媒体预览', exact: true })
 }
 
 async function slowTransfer(page: Page, image: Buffer, stalled = false) {
@@ -85,16 +90,17 @@ test('opening an image shows a preview and closing it leaves the shared original
   })
   try {
     await send(page)
-    await expect(page.locator('.creation-image-preview')).toHaveAttribute('aria-busy', 'true')
-    await page.locator('.creation-image-preview').click()
-    const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
+    const save = page.getByLabel('模型生成结果', { exact: true }).locator('.browser-save')
+    await expect(save).toContainText('（0/1）')
+    const viewer = await openGalleryPreview(page)
     await expect(viewer).toBeVisible()
     await expect.poll(() => viewer.locator('img').evaluateAll(images => images.some(image => (image as HTMLImageElement).naturalWidth > 0)), { timeout: 1500 }).toBe(true)
     expect(state.originals).toBe(1)
     await page.keyboard.press('Escape')
     await expect(viewer).not.toBeVisible()
+    await page.getByRole('button', { name: '关闭作品库', exact: true }).click()
     release()
-    await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
+    await expect(save).toHaveText('图片已保存到此浏览器')
     expect(state.originals).toBe(1)
     expect(state.generations).toBe(1)
   } finally { release() }
@@ -109,8 +115,7 @@ test('stalled originals stop loading and can be retried while the preview stays 
   })
   await slowTransfer(page, image, true)
   await send(page)
-  await page.locator('.creation-image-preview').click()
-  const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
+  const viewer = await openGalleryPreview(page)
   await expect(viewer.getByRole('button', { name: '重新加载', exact: true })).toBeVisible({ timeout: 6000 })
   await expect(viewer.locator('.lightbox-loading')).toHaveCount(0)
   expect(nativeOriginals).toBe(0)

@@ -220,7 +220,7 @@ export function fetchPublicImage(source: string, signal?: AbortSignal) {
   return fetchPublicMedia(source, "image", MAX_IMAGE_BYTES, signal);
 }
 
-export async function fetchPublicMedia(source: string, kind: "image" | "video", maxBytes: number, signal?: AbortSignal, requestHeaders?: Headers) {
+export async function fetchPublicMedia(source: string, kind: "image" | "video", maxBytes: number, signal?: AbortSignal, requestHeaders?: Headers, mode?: "stream-original") {
   const allowed = kind === "image" ? IMAGE_TYPES : new Set(["video/mp4", "video/webm", "video/quicktime", "video/x-matroska"]);
   const limitMessage =
     kind === "image"
@@ -230,7 +230,7 @@ export async function fetchPublicMedia(source: string, kind: "image" | "video", 
   const ranges = videoRangeHeaders(kind === "video" ? requestHeaders : undefined);
   const controller = new AbortController();
   const abort = () => controller.abort();
-  const timeout = setTimeout(abort, kind === "video" ? 120000 : 60000);
+  const timeout = setTimeout(abort, mode === "stream-original" ? 300000 : kind === "video" ? 120000 : 60000);
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   const cleanup = () => {
@@ -240,6 +240,8 @@ export async function fetchPublicMedia(source: string, kind: "image" | "video", 
   try {
     for (let redirects = 0; ; redirects++) {
       const response = await connect(url, controller.signal, kind, ranges);
+      // The original relay times pending reads itself and may pause this socket for a slow browser.
+      if (mode === "stream-original") response.setTimeout(0);
       const status = response.statusCode || 502;
       if ([301, 302, 303, 307, 308].includes(status)) {
         response.destroy();
@@ -316,7 +318,7 @@ export async function fetchPublicMedia(source: string, kind: "image" | "video", 
         headers.set("Content-Length", length);
         headers.set("X-Image-Content-Length", length);
       }
-      const body = Readable.toWeb(limited) as ReadableStream<Uint8Array>;
+      const body = Readable.toWeb(limited, mode === "stream-original" ? { strategy: { highWaterMark: 0 } } : undefined) as ReadableStream<Uint8Array>;
       return new Response(videoHeaders ? videoResponseBody(body, headers, maxBytes) : body, {
         status: kind === "video" ? status : 200,
         headers,

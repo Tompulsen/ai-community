@@ -18,10 +18,18 @@ const imageStyle = computed(() => size.value && !props.thumbnail ? {
 const loaded = ref(false), failed = ref(false), retrying = ref(false), replacement = ref('')
 const element = ref<HTMLElement>(), fallback = ref('')
 const pendingPreview = ref(''), previewReady = ref(false)
+const showOriginalActions = ref(false)
+const directOriginal = computed(() => {
+  if (props.thumbnail || !/^(?:https?:\/\/|\/api\/creation\/media\?)/i.test(props.src)) return
+  const source = mediaSource(props.src)
+  if (source?.startsWith('/api/creation/media?') && !new URL(source, location.origin).searchParams.has('variant')) return source
+})
+let slowRead: ReturnType<typeof setTimeout> | undefined
 let revision = 0
 let controller: AbortController | undefined, observer: IntersectionObserver | undefined
 function clearImage(keepPreview = false) {
   controller?.abort()
+  clearTimeout(slowRead); showOriginalActions.value = false
   if (replacement.value) URL.revokeObjectURL(replacement.value)
   if (!keepPreview) { pendingPreview.value = ''; previewReady.value = false }
   replacement.value = ''; fallback.value = ''; loaded.value = false
@@ -31,12 +39,13 @@ watch([() => props.src, () => props.thumbnail, element], () => {
   revision++; release(); size.value = dimensions.get(props.src); loaded.value = false; failed.value = false; retrying.value = false
   if (!props.src || !element.value) return
   const accepted = revision
-  const start = () => { if (accepted === revision && !failed.value) void read() }
+  const start = () => { if (accepted === revision && !failed.value && !fallback.value) void read() }
   if (typeof IntersectionObserver === 'undefined') start()
   else {
     observer = new IntersectionObserver(entries => {
       if (accepted !== revision) return
-      if (entries.some(entry => entry.isIntersecting)) start(); else clearImage()
+      if (entries.some(entry => entry.isIntersecting)) start()
+      else if (!failed.value && !(fallback.value && fallback.value === directOriginal.value)) clearImage()
     }, { rootMargin: '160px 0px' })
     observer.observe(element.value)
   }
@@ -56,6 +65,8 @@ async function read(retry = false) {
   const accepted = revision, current = new AbortController()
   controller?.abort(); controller = current
   retrying.value = retry
+  clearTimeout(slowRead)
+  if (directOriginal.value) slowRead = setTimeout(() => { showOriginalActions.value = true }, 8000)
   let previewTimer: ReturnType<typeof setTimeout> | undefined
   const localPath = props.src.startsWith(location.origin + '/') ? props.src.slice(location.origin.length) : props.src
   if (!props.thumbnail && props.preview?.startsWith('data:image/')) pendingPreview.value = props.preview
@@ -73,15 +84,28 @@ async function read(retry = false) {
     const blob = await readCreationImage(props.src, current.signal, props.thumbnail ? true : 'display')
     if (current.signal.aborted || accepted !== revision) return
     if (replacement.value) URL.revokeObjectURL(replacement.value)
+    fallback.value = ''; showOriginalActions.value = false
     replacement.value = URL.createObjectURL(blob); failed.value = false; loaded.value = false
-  } catch {
+  } catch (cause) {
     if (current.signal.aborted || accepted !== revision) return
-    failed.value = true
+    const status = (cause as { status?: number })?.status
+    showOriginalActions.value = [0, 408, 500, 502, 503, 504].includes(status ?? -1)
+    if (!fallback.value || !showOriginalActions.value) {
+      fallback.value = ''; failed.value = true
+    }
   }
-  finally { clearTimeout(previewTimer); if (accepted === revision) retrying.value = false }
+  finally {
+    clearTimeout(previewTimer)
+    if (!current.signal.aborted) { clearTimeout(slowRead); retrying.value = false }
+  }
+}
+function showOriginal() {
+  fallback.value = directOriginal.value || ''
+  loaded.value = false; failed.value = false
 }
 function imageFailed(event: Event) {
   if ((event.target as HTMLImageElement).getAttribute('src') !== (replacement.value || fallback.value)) return
+  if (!replacement.value) fallback.value = ''
   forgetCreationImage(props.src, props.thumbnail ? true : 'display'); forgetCreationImage(props.src); failed.value = true
 }
 function retry() {
@@ -94,16 +118,21 @@ function retry() {
 
 <template>
   <div ref="element" class="creation-image" :class="{ 'creation-image-thumbnail': thumbnail }">
-    <div v-if="failed ? previewReady : !replacement && !fallback" class="image-loading" :class="{ 'with-preview': previewReady }" :style="imageStyle" role="status">
+    <div v-if="failed ? previewReady : !replacement && (!fallback || (fallback === directOriginal && !loaded))" class="image-loading" :class="{ 'with-preview': previewReady }" :style="imageStyle" role="status">
       <img v-if="pendingPreview" :key="pendingPreview" :src="pendingPreview" alt="生成图片预览" decoding="async" @load="previewReady = true" @error="pendingPreview = ''; previewReady = false" />
       <template v-if="!previewReady"><LoaderCircle :size="20" aria-hidden="true" /><span>正在加载图片</span></template>
     </div>
     <button v-if="failed" class="image-retry" :class="{ 'after-preview': previewReady }" type="button" :disabled="retrying" aria-label="重新加载图片" @click="retry"><RotateCw :size="18" /><span>{{ retrying ? '正在加载' : '重新加载图片' }}</span></button>
+    <img v-else-if="directOriginal && fallback === directOriginal" v-show="loaded" class="direct-original" :src="fallback" :alt="alt" :style="imageStyle" @load="load" @error="imageFailed" />
     <img v-else-if="thumbnail && (replacement || fallback)" :src="replacement || fallback" :alt="alt" width="72" height="72" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
     <button v-else-if="replacement || fallback" type="button" class="creation-image-preview" :aria-label="label" :aria-busy="!loaded" @click="emit('open')">
       <img :key="replacement || fallback" :src="replacement || fallback" :alt="alt" :width="size?.width" :height="size?.height" :style="imageStyle" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
     </button>
-    <button v-if="editable && loaded && !failed" type="button" class="creation-image-edit" aria-label="打开图片画布" title="画布编辑" @click.stop="emit('edit')"><SquarePen :size="18" /></button>
+    <div v-if="showOriginalActions && directOriginal" class="original-actions">
+      <button v-if="fallback !== directOriginal" class="studio-tool" type="button" @click="showOriginal">直接查看原图</button>
+      <a class="studio-tool" :href="directOriginal" download>直接下载原图</a>
+    </div>
+    <button v-if="editable && loaded && !failed && !showOriginalActions" type="button" class="creation-image-edit" aria-label="打开图片画布" title="画布编辑" @click.stop="emit('edit')"><SquarePen :size="18" /></button>
   </div>
 </template>
 
@@ -113,7 +142,8 @@ function retry() {
 @media (hover: hover) and (pointer: fine) and (min-width: 640px) { .creation-image-edit { display: grid; place-items: center; }.creation-image:hover .creation-image-edit, .creation-image:focus-within .creation-image-edit { opacity: 1; pointer-events: auto; }.creation-image-edit:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; } }
 @media (prefers-reduced-motion: reduce) { .creation-image-edit { transition: none; } }
 .creation-image-preview { position: relative; display: block; width: fit-content; max-width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: zoom-in; }
-.creation-image-preview img { display: block; width: auto; height: auto; max-width: 100%; max-height: var(--creation-image-height); object-fit: contain; }
+.creation-image-preview img, .direct-original { display: block; width: auto; height: auto; max-width: 100%; max-height: var(--creation-image-height); object-fit: contain; }
+.original-actions { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .creation-image-preview[aria-busy="true"] img { min-width: min(240px, 100%); min-height: 160px; }
 .creation-image-preview:focus-visible, .image-retry:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .image-retry { display: flex; align-items: center; justify-content: center; gap: 8px; width: min(320px, 100%); min-height: 160px; padding: 16px; border: 0; border-radius: 6px; background: var(--surface-soft); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; }

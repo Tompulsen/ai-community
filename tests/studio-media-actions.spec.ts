@@ -57,6 +57,28 @@ for (const action of ['delete', 'switch', 'disable']) test(`automatic browser sa
   expect(result).toEqual({ count: action === 'disable' ? 1 : 0, own: action === 'delete' ? 0 : 1, foreign: 0, bytes: 0 })
 })
 
+test('opening a historical image with an interrupted save only fetches its missing original', async ({ page }) => {
+  await fixture(page)
+  const requests: string[] = []
+  page.on('request', request => requests.push(request.url()))
+  await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'image/png', body: originalImage }))
+  const result = await page.evaluate(async inline => {
+    const store = await import('/src/studio-task-store.ts'), studio = window.mediaTest
+    await store.saveTaskSnapshot('17', [{
+      id: 'interrupted-gallery', owner: '17', kind: 'image', model: 'test', prompt: 'two originals', phase: 'complete',
+      protocol: 'sync', createdAt: 1, text: '', references: [], request: {},
+      urls: [inline, 'https://media.example/missing.png'], browserSave: { state: 'saving', completed: 1, total: 2 },
+    }])
+    const [historical] = (await store.getTaskPage('17')).tasks
+    const task = studio.canonicalCreationTask(historical)
+    await Promise.all([studio.cacheCreationImages(task), studio.cacheCreationImages(task)])
+    return { state: task.browserSave.state, urls: task.urls }
+  }, 'data:image/png;base64,' + originalImage.toString('base64'))
+  expect(result).toEqual({ state: 'saved', urls: ['studio-asset:interrupted-gallery:0', 'studio-asset:interrupted-gallery:1'] })
+  expect(requests.filter(url => url.includes('/api/creation/media')).map(url => new URL(url).searchParams.get('url'))).toEqual(['https://media.example/missing.png'])
+  expect(requests.filter(url => url.includes('/api/creation/generate'))).toHaveLength(0)
+})
+
 test('concurrent automatic caching and download preserve every local image pointer', async ({ page }) => {
   await fixture(page)
   await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'image/png', body: originalImage }))

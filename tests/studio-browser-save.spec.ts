@@ -66,7 +66,7 @@ async function storedImages(page: Page) {
   })
 }
 
-test('pending originals show a loading placeholder and gallery covers share their browser save', async ({ page }, info) => {
+test('pending originals show a loading placeholder and gallery covers share their browser save', async ({ page, context }, info) => {
   const { state, image } = await fixture(page, true)
   let release!: () => void
   const pending = new Promise<void>(resolve => { release = resolve })
@@ -80,7 +80,7 @@ test('pending originals show a loading placeholder and gallery covers share thei
     await send(page)
     await expect.poll(() => reads.length).toBe(1)
     await expect(page.locator('.creation-image').getByRole('status')).toHaveText('正在加载图片')
-    await expect(page.locator('.browser-save')).toHaveText('生成完成，正在保存图片到此浏览器（0/1）…')
+    await expect(page.locator('.browser-save')).toHaveText('生成完成，正在接收原图（0/1）…')
     await expect(page.locator('.creation-image img')).toHaveCount(0)
     for (const width of [390, 1440]) {
       await page.setViewportSize({ width, height: 900 })
@@ -92,7 +92,13 @@ test('pending originals show a loading placeholder and gallery covers share thei
     await expect(library.getByText('正在加载封面', { exact: true })).toBeAttached()
     await page.waitForTimeout(250)
     expect(reads).toEqual(['original'])
-    release()
+    const blocker = await context.newPage()
+    try {
+      await holdMediaStore(blocker, 'originals')
+      release()
+      await expect(page.locator('.creation-response .browser-save')).toHaveText('生成完成，正在保存图片到此浏览器（0/1）…')
+      await expect.poll(() => page.locator('.creation-image-preview img').evaluateAll(images => images.some(img => (img as HTMLImageElement).naturalWidth > 0))).toBe(true)
+    } finally { await blocker.close() }
     await expect.poll(() => library.locator('.cover-preview img').evaluateAll(images => images.length === 1 && (images[0] as HTMLImageElement).naturalWidth > 0)).toBe(true)
     await expect.poll(async () => (await storedImages(page)).sizes).toEqual([image.length])
     await expect(page.locator('.creation-image-preview img')).toHaveJSProperty('complete', true)
@@ -107,6 +113,53 @@ test('pending originals show a loading placeholder and gallery covers share thei
     expect(state.originals).toBe(originals)
     expect(state.generations).toBe(1)
   } finally { release() }
+})
+
+test('a stalled original can be viewed and downloaded before the shared read finishes', async ({ page }) => {
+  const { state, image } = await fixture(page)
+  await page.evaluate(() => {
+    const fetch = window.fetch.bind(window)
+    window.fetch = (...args) => {
+      const url = new URL(String(args[0]), location.href)
+      if (url.pathname === '/api/creation/media' && !url.searchParams.has('variant')) {
+        return new Promise<Response>(resolve => {
+          Object.assign(window, { finishOriginal: () => resolve(fetch(...args)) })
+        })
+      }
+      return fetch(...args)
+    }
+  })
+  await send(page)
+  const card = page.locator('.creation-response'), save = card.locator('.browser-save')
+  const view = card.getByRole('button', { name: '直接查看原图' })
+  await expect(save).toContainText('（0/1）')
+  await expect(view).toBeHidden()
+  await expect(view).toBeVisible({ timeout: 12000 })
+  expect(state.originals).toBe(0)
+  await view.click()
+  const preview = card.locator('.creation-image img')
+  await expect.poll(() => preview.evaluateAll(images => images.some(img => (img as HTMLImageElement).naturalWidth > 0))).toBe(true)
+  expect(state.originals).toBe(1)
+  const download = page.waitForEvent('download')
+  await card.getByRole('link', { name: '直接下载原图' }).click()
+  const url = new URL((await download).url())
+  expect(url.origin).toBe(new URL(page.url()).origin)
+  expect(url.pathname).toBe('/api/creation/media')
+  expect(url.searchParams.get('url')).toBe('https://media.example/1-0.jpg')
+  expect(url.searchParams.has('variant')).toBe(false)
+  await expect(save).toContainText('（0/1）')
+  expect((await storedImages(page)).sizes).toEqual([])
+  // An offscreen card can release its scripted reader without discarding a picture the user opened.
+  await page.locator('.creation-image').evaluate(element => { element.style.transform = 'translateY(400vh)' })
+  await expect(preview).not.toBeInViewport()
+  await page.locator('.creation-image').evaluate(element => { element.style.transform = '' })
+  await expect(preview).toBeInViewport()
+  expect(state.originals).toBe(1)
+  await page.evaluate(() => (window as any).finishOriginal())
+  await expect(save).toHaveText('图片已保存到此浏览器')
+  await expect(card.getByRole('link', { name: '直接下载原图' })).toHaveCount(0)
+  expect((await storedImages(page)).sizes).toEqual([image.length])
+  expect(state.generations).toBe(1)
 })
 
 for (const mode of ['server', 'stream']) test(`a slow ${mode} image shows its available preview while saving the original`, async ({ page }) => {
@@ -186,6 +239,26 @@ for (const allowPreview of [true, false]) test(`a private original denied after 
   } finally { release() }
 })
 
+async function holdMediaStore(blocker: Page, storeName: string) {
+  await blocker.goto('/assets/brand/octopus-community.jpg')
+  await blocker.evaluate(storeName => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('community-studio-media')
+    open.onerror = () => reject(open.error)
+    open.onsuccess = () => {
+      const tx = open.result.transaction(storeName, 'readwrite'), store = tx.objectStore(storeName)
+      const hold = () => { store.get(['17', 'hold']).onsuccess = () => { resolve(); hold() } }
+      hold()
+    }
+  }), storeName)
+}
+
+function speedUpStorageDeadlines() {
+  const setTimer = window.setTimeout.bind(window), abortTimer = AbortSignal.timeout.bind(AbortSignal)
+  const scale = (ms: number) => ms >= 5000 ? ms / 50 : ms
+  window.setTimeout = ((callback: TimerHandler, ms = 0, ...args: any[]) => setTimer(callback, scale(ms), ...args)) as typeof setTimeout
+  AbortSignal.timeout = ms => abortTimer(scale(ms))
+}
+
 test('a blocked local original shows retry and loads after another tab releases its database transaction', async ({ page, context }) => {
   const { state } = await fixture(page)
   await send(page)
@@ -203,21 +276,9 @@ test('a blocked local original shows retry and loads after another tab releases 
     }
   }))
   const blocker = await context.newPage()
-  await blocker.goto('/assets/brand/octopus-community.jpg')
-  await blocker.evaluate(() => new Promise<void>((resolve, reject) => {
-    const open = indexedDB.open('community-studio-media')
-    open.onerror = () => reject(open.error)
-    open.onsuccess = () => {
-      const tx = open.result.transaction('originals', 'readwrite'), store = tx.objectStore('originals')
-      const hold = () => { store.get(['17', 'hold']).onsuccess = () => { resolve(); hold() } }
-      hold()
-    }
-  }))
+  await holdMediaStore(blocker, 'originals')
   try {
-    await page.addInitScript(() => {
-      const timeout = AbortSignal.timeout.bind(AbortSignal)
-      AbortSignal.timeout = ms => timeout(ms === 60000 ? 500 : ms)
-    })
+    await page.addInitScript(speedUpStorageDeadlines)
     await page.reload()
     const retry = page.getByRole('button', { name: '重新加载图片', exact: true })
     await expect(retry).toBeVisible()
@@ -588,6 +649,89 @@ test('format selection survives the original moving into the browser cache', asy
   expect(state.downloads).toBe(1)
 })
 
+test('a snapshot blocked by another tab retries before submitting the image once', async ({ page, context }) => {
+  const { state, image } = await fixture(page)
+  const blocker = await context.newPage()
+  await holdMediaStore(blocker, 'meta')
+  try {
+    await page.evaluate(speedUpStorageDeadlines)
+    await page.evaluate(() => {
+      const transaction = IDBDatabase.prototype.transaction
+      ;(window as any).snapshotWrites = 0
+      IDBDatabase.prototype.transaction = function (names, mode, options) {
+        if (this.name === 'community-studio-media' && mode === 'readwrite' && Array.isArray(names) && names.includes('tasks'))
+          (window as any).snapshotWrites++
+        return transaction.call(this, names, mode, options)
+      }
+    })
+    await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保存跨标签页快照')
+    await page.getByRole('button', { name: '开始生成', exact: true }).click()
+    await expect.poll(() => page.evaluate(() => (window as any).snapshotWrites), { intervals: [20] }).toBeGreaterThanOrEqual(2)
+    expect(state.generations).toBe(0)
+    await blocker.close()
+    await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
+    const saved = await storedImages(page)
+    expect(saved.urls).toEqual([expect.stringMatching(/^studio-asset:/)])
+    expect(saved.sizes).toEqual([image.length])
+    expect(state.generations).toBe(1)
+  } finally { if (!blocker.isClosed()) await blocker.close() }
+})
+
+for (const persistent of [false, true]) test(`a ${persistent ? 'persistent' : 'temporary'} IndexedDB original write stall leaves generation complete and recovers safely`, async ({ page }) => {
+  const { state, image } = await fixture(page)
+  await page.evaluate(speedUpStorageDeadlines)
+  await page.evaluate(persistent => {
+    const probe = (window as any).originalWriteProbe = { task: '', attempts: 0, aborted: 0, stall: true, failureUrls: [] as string[] }
+    const put = IDBObjectStore.prototype.put
+    IDBObjectStore.prototype.put = function (value, ...args) {
+      const request = put.call(this, value, ...args)
+      if (persistent && this.name === 'tasks' && value.id === probe.task && value.value.browserSave?.state === 'failed') {
+        probe.failureUrls = value.value.urls
+        const holdFailure = () => { if (probe.stall) this.get([value.owner, value.id]).onsuccess = holdFailure }
+        holdFailure()
+      }
+      if (this.name !== 'originals' || !value.taskId) return request
+      probe.task ||= value.taskId
+      if (probe.task !== value.taskId) return request
+      probe.attempts++
+      if (!probe.stall || (!persistent && probe.attempts > 1)) return request
+      this.transaction.addEventListener('abort', () => probe.aborted++, { once: true })
+      // A pending request keeps this real transaction uncommitted until the writer aborts it.
+      const hold = () => { this.get(value.key).onsuccess = hold }
+      hold()
+      return request
+    }
+  }, persistent)
+  await send(page)
+  const first = page.locator('.browser-save').first()
+  await expect.poll(() => page.evaluate(() => (window as any).originalWriteProbe.attempts)).toBeGreaterThan(0)
+  if (persistent) {
+    const retry = first.getByRole('button', { name: '重试保存图片' })
+    await expect(retry).toBeVisible()
+    await expect.poll(() => page.evaluate(() => (window as any).originalWriteProbe.failureUrls), { intervals: [10] }).toEqual(['https://media.example/1-0.jpg'])
+    expect(await page.evaluate(() => (window as any).originalWriteProbe.aborted)).toBe(2)
+    expect(state.generations).toBe(1)
+    await retry.click()
+    await page.evaluate(() => { (window as any).originalWriteProbe.stall = false })
+    await expect(first).toHaveText('图片已保存到此浏览器')
+    expect(state.generations).toBe(1)
+    await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保存下一张图片')
+    await page.getByRole('button', { name: '开始生成', exact: true }).click()
+    await expect(page.locator('.browser-save')).toHaveCount(2)
+    await expect(page.locator('.browser-save').last()).toHaveText('图片已保存到此浏览器')
+  }
+  await expect(first).toHaveText('图片已保存到此浏览器')
+  const probe = await page.evaluate(() => (window as any).originalWriteProbe)
+  expect(probe.attempts).toBe(persistent ? 3 : 2)
+  expect(probe.aborted).toBe(persistent ? 2 : 1)
+  const saved = await storedImages(page)
+  expect(saved.sizes).toEqual([image.length])
+  expect(saved.urls).toHaveLength(persistent ? 2 : 1)
+  expect(saved.urls.every(url => url.startsWith('studio-asset:'))).toBe(true)
+  expect(state.generations).toBe(persistent ? 2 : 1)
+  expect(state.originals).toBe(state.generations)
+})
+
 test('an inline result remains downloadable when browser storage is full', async ({ page }) => {
   const { image, state } = await fixture(page)
   await page.route('**/api/creation/generate', route => {
@@ -709,7 +853,7 @@ test('refresh resumes an interrupted original save and preserves the generation'
   })
   await send(page)
   await expect.poll(() => entered).toBe(true)
-  await expect(page.locator('.browser-save')).toContainText('正在保存')
+  await expect(page.locator('.browser-save')).toContainText('正在接收原图')
   blocked = false
   await page.reload()
   release()
@@ -735,7 +879,7 @@ test('multi-image progress keeps generation complete and retries only the missin
     return failing ? route.fulfill({ status: 502 }) : route.fulfill({ contentType: 'image/jpeg', body: image })
   })
   await send(page)
-  await expect(page.locator('.browser-save')).toContainText('生成完成，正在保存图片到此浏览器（1/2）')
+  await expect(page.locator('.browser-save')).toContainText('生成完成，正在接收原图（1/2）')
   release()
   await expect(page.locator('.browser-save')).toContainText('尚未保存到此浏览器')
   const saved = await storedImages(page)

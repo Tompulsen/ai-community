@@ -68,7 +68,7 @@ export interface CreationTask {
   localSave?: { state: 'saving' | 'downloadRequested' | 'failed'; error?: string; requestedAt?: number; completed?: number }
   moderation?: CreationModeration
   moderationContent?: string
-  browserSave?: { state: 'saving' | 'saved' | 'failed'; error?: string; completed?: number; total?: number }
+  browserSave?: { state: 'saving' | 'saved' | 'failed'; stage?: 'receiving' | 'writing'; error?: string; completed?: number; total?: number }
   galleryHidden?: boolean
   galleryHiddenIndices?: number[]
   toolCalls?: StudioToolCall[]
@@ -1359,8 +1359,9 @@ export function cacheCreationImages(value: CreationTask, retry = false): Promise
   }
   if (!task || task.owner !== value.owner || task.kind !== 'image' || task.phase !== 'complete' || !task.urls.length) return Promise.resolve()
   const key = `${task.owner}:${task.id}`, pending = imageSaves.get(key)
-  if (pending) return retry ? pending.promise.then(() => cacheCreationImages(value, true)) : pending.promise
-  if (!retry && task.browserSave) return Promise.resolve()
+  // A failed save can still be writing its error to history when the user clicks retry.
+  if (pending && !(retry && task.browserSave?.state === 'failed')) return pending.promise
+  if (!retry && (task.browserSave?.state === 'saved' || task.browserSave?.state === 'failed')) return Promise.resolve()
   const version = epoch, controller = new AbortController(), signal = controller.signal
   const current = () => version === epoch && task.owner === activeOwner() && creation.tasks.includes(task) && !signal.aborted
   const check = () => { if (!current()) throw new DOMException('Stopped', 'AbortError') }
@@ -1389,9 +1390,12 @@ export function cacheCreationImages(value: CreationTask, retry = false): Promise
           if (source.startsWith('studio-asset:')) {
             if (!await readTaskAsset(task.owner, source)) throw new Error('此浏览器中的原图已丢失，请从已下载的文件恢复。')
           } else {
+            task.browserSave = { state: 'saving', stage: 'receiving', completed, total: task.urls.length }
             const blob = await readCreationImage(source, signal)
             check()
-            const local = await saveTaskOriginal(task.owner, task.id, index, source, blob, signal); check()
+            const local = await saveTaskOriginal(task.owner, task.id, index, source, blob, signal, () => {
+              task.browserSave = { state: 'saving', stage: 'writing', completed, total: task.urls.length }
+            }); check()
             if (!local || ![source, local].includes(task.urls[index]!)) throw new Error('原图记录已变化，请重新打开后保存。')
             task.urls[index] = local
           }

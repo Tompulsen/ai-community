@@ -122,7 +122,7 @@ test('the batch deadline also ends an ignored header wait and cancels a late res
   assert.equal(cancelled, true)
 })
 
-test('image saves have two shared read slots and release them after download failures', async t => {
+test('image saves have four shared read slots and release them after download failures', async t => {
   const root = await fixture(t)
   let active = 0, peak = 0
   const fetch = async () => {
@@ -131,7 +131,7 @@ test('image saves have two shared read slots and release them after download fai
     active--; return imageResponse()
   }
   await Promise.all(Array.from({ length: 5 }, () => saveImageOutputs(root, key(), [{ url: 'https://media.example/a.png' }], fetch)))
-  assert.equal(peak, 2)
+  assert.equal(peak, 4)
   await assert.rejects(saveImageOutputs(root, key(), [{ url: 'https://media.example/a.png' }], async () => { throw new Error('failed') }))
   await saveImageOutputs(root, key(), [{ url: 'https://media.example/a.png' }], fetch)
   assert.equal(active, 0)

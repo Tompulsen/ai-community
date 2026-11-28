@@ -56,6 +56,8 @@ COMMUNITY_WALLET_CLIENT_ID=https://YOUR_COMMUNITY_ORIGIN
 COMMUNITY_WALLET_SECRET=<independent random secret, at least 32 characters>
 ```
 
+In the `image-async` Compose environment, replace any previous `MEDIA_PROXY_STREAMS=8` with `MEDIA_PROXY_STREAMS=200` to allow 200 concurrent original image transfers per API process.
+
 Nginx must preserve the original `/async-images/...`, `/async-videos/...` and
 `/v1/images/...` request path and all six proof/idempotency headers. Keep all
 feature flags off until New API and both proxies are deployed and verified.

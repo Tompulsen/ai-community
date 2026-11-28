@@ -1,8 +1,11 @@
 // Cursor and thumbnail storage adapted from octopus_chat app/store/gallery.ts (MIT).
 import type { CreationTask } from './native-studio'
 import { waitForToolResult } from '../shared/studio/tool-result'
+import { combineAbortSignals } from './abort-signals'
 
 const databaseName = 'community-studio-media'
+const writeTimeoutMs = 20000
+const storageTimeout = () => new DOMException('浏览器本地存储响应超时，请关闭其他创作页后重试保存图片。', 'TimeoutError')
 const initialized = new Map<string, Map<string, string>>()
 const loadedForUpdate = new Map<string, Map<string, string>>()
 const mediaIdentities = new Map<string, Map<string, string>>()
@@ -41,9 +44,13 @@ function checkOwner(owner: string) {
 }
 function database() {
   if (opening) return opening
-  opening = new Promise<IDBDatabase>((resolve, reject) => {
+  const pending = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(databaseName, 2)
+    let abandoned = false
+    const fail = (reason: unknown) => { abandoned = true; clearTimeout(timer); reject(reason) }
+    const timer = setTimeout(() => fail(storageTimeout()), writeTimeoutMs)
     request.onupgradeneeded = () => {
+      if (abandoned) { request.transaction?.abort(); return }
       const db = request.result
       if (!db.objectStoreNames.contains('tasks')) {
         const tasks = db.createObjectStore('tasks', { keyPath: ['owner', 'id'] })
@@ -57,21 +64,47 @@ function database() {
       if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'owner' })
       db.createObjectStore('contents', { keyPath: ['owner', 'identity'] })
     }
-    request.onerror = () => { opening = undefined; reject(request.error) }
-    request.onblocked = () => { opening = undefined; reject(new Error('媒体数据库正在更新，请关闭其它旧页面后重试。')) }
+    request.onerror = () => fail(request.error)
+    request.onblocked = () => fail(new Error('媒体数据库正在更新，请关闭其它旧页面后重试。'))
     request.onsuccess = () => {
       const db = request.result
+      clearTimeout(timer)
+      if (abandoned) { db.close(); return }
       db.onversionchange = () => { db.close(); opening = undefined; cachedReads.clear(); cachedStorageReads.clear() }
+      db.onclose = () => { if (opening === pending) opening = undefined }
       resolve(db)
     }
   })
-  return opening
+  opening = pending
+  void pending.catch(() => { if (opening === pending) opening = undefined })
+  return pending
 }
-function completed(transaction: IDBTransaction) {
+function completed(transaction: IDBTransaction, signal?: AbortSignal) {
+  const abort = () => { try { transaction.abort() } catch { /* Already complete. */ } }
+  signal?.addEventListener('abort', abort, { once: true })
   return new Promise<void>((resolve, reject) => {
     transaction.oncomplete = () => resolve()
     transaction.onabort = transaction.onerror = () => reject(transaction.error || new Error('媒体数据未能保存。'))
+  }).finally(() => signal?.removeEventListener('abort', abort))
+}
+function queueTaskWrite(owner: string, write: (signal: AbortSignal) => Promise<void>, caller?: AbortSignal) {
+  if (typeof indexedDB === 'undefined') return Promise.reject(new Error('此浏览器无法使用本地图库。'))
+  const pending = (writes.get(owner) || Promise.resolve()).catch(() => {}).then(async () => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      caller?.throwIfAborted()
+      const deadline = new AbortController()
+      const timer = setTimeout(() => deadline.abort(storageTimeout()), writeTimeoutMs)
+      const { signal, dispose } = combineAbortSignals(caller ? [caller, deadline.signal] : [deadline.signal])
+      try { await waitForToolResult(write(signal), signal); return }
+      catch (cause) {
+        caller?.throwIfAborted()
+        if (!deadline.signal.aborted && !(cause instanceof DOMException && cause.name === 'TimeoutError')) throw cause
+      } finally { clearTimeout(timer); dispose() }
+    }
+    throw storageTimeout()
   })
+  writes.set(owner, pending)
+  return pending
 }
 function read<T>(store: IDBObjectStore, key: IDBValidKey) {
   return new Promise<T | undefined>((resolve, reject) => {
@@ -217,12 +250,13 @@ async function prepareTask(owner: string, raw: string, db: IDBDatabase, previous
 function hasInlineImages(task: CreationTask) {
   return [...task.urls, task.preview || '', ...(task.references || []).map(file => file.url)].some(url => url.startsWith('data:image/'))
 }
-async function migrateStoredTask(owner: string, initial: TaskRecord, db: IDBDatabase): Promise<TaskRecord | undefined> {
+async function migrateStoredTask(owner: string, initial: TaskRecord, db: IDBDatabase, signal: AbortSignal): Promise<TaskRecord | undefined> {
   let current: TaskRecord | undefined = initial
   for (let attempt = 0; attempt < 3; attempt++) {
     if (!current || !hasInlineImages(current.value)) return current
     const raw = JSON.stringify(current.value), prepared = await prepareTask(owner, raw, db)
-    const transaction = db.transaction(['tasks', 'originals', 'contents', 'previews', 'meta'], 'readwrite'), done = completed(transaction)
+    signal.throwIfAborted()
+    const transaction = db.transaction(['tasks', 'originals', 'contents', 'previews', 'meta'], 'readwrite'), done = completed(transaction, signal)
     const records = transaction.objectStore('tasks'), writeAsset = assetWriter(transaction)
     const request = records.get([owner, current.id])
     request.onsuccess = () => {
@@ -245,32 +279,35 @@ export async function readTaskSnapshot(owner: string): Promise<CreationTask[] | 
   checkOwner(owner)
   await writes.get(owner)?.catch(() => {})
   const db = await database()
-  const metadata = await read<TaskMetadata>(db.transaction('meta').objectStore('meta'), owner)
+  const metadata = await readLocalMedia('meta', tx => read<TaskMetadata>(tx.objectStore('meta'), owner))
   const tasks: CreationTask[] = [], identities = new Map<string, string>()
   let after: TaskPageCursor | undefined
   const baselines = new Map<string, string>()
   for (;;) {
-    const transaction = db.transaction('tasks'), done = completed(transaction), batch: TaskRecord[] = []
-    let inlineBytes = 0
     const range = after ? IDBKeyRange.bound([owner, 0, ''], [owner, after.createdAt, after.id], false, true) : ownerRange(owner)
-    const request = transaction.objectStore('tasks').index('ownerCreatedAtId').openCursor(range, 'prev')
-    request.onsuccess = () => {
-      const cursor = request.result
-      if (!cursor) return
-      const record = cursor.value as TaskRecord
-      batch.push(record)
-      inlineBytes += [...record.value.urls, record.value.preview || '', ...(record.value.references || []).map(file => file.url)]
-        .reduce((size, url) => size + (url.startsWith('data:') ? url.length : 0), 0)
-      if (batch.length < 24 && inlineBytes < 2 * 1024 ** 2) cursor.continue()
-    }
-    await done
+    const batch = await readLocalMedia('tasks', transaction => {
+      const records: TaskRecord[] = []
+      let inlineBytes = 0
+      const request = transaction.objectStore('tasks').index('ownerCreatedAtId').openCursor(range, 'prev')
+      request.onsuccess = () => {
+        const cursor = request.result
+        if (!cursor) return
+        const record = cursor.value as TaskRecord
+        records.push(record)
+        inlineBytes += [...record.value.urls, record.value.preview || '', ...(record.value.references || []).map(file => file.url)]
+          .reduce((size, url) => size + (url.startsWith('data:') ? url.length : 0), 0)
+        if (records.length < 24 && inlineBytes < 2 * 1024 ** 2) cursor.continue()
+      }
+      return records
+    })
     if (!batch.length) break
     const last = batch.at(-1)!
     after = { createdAt: last.createdAt, id: last.id }
     for (let record of batch) {
       const task = record.value
       if (hasInlineImages(task)) {
-        const current = await migrateStoredTask(owner, record, db)
+        let current: TaskRecord | undefined
+        await queueTaskWrite(owner, async signal => { current = await migrateStoredTask(owner, record, db, signal) })
         if (!current) continue
         record = current
       }
@@ -297,9 +334,7 @@ export async function readTaskForUpdate(owner: string, id: string): Promise<Crea
   checkOwner(owner)
   await writes.get(owner)?.catch(() => {})
   if (deletedTaskIds.get(owner)?.has(id)) return
-  const db = await database(), transaction = db.transaction('tasks'), done = completed(transaction)
-  const record = await read<TaskRecord>(transaction.objectStore('tasks'), [owner, id])
-  await done
+  const record = await readLocalMedia('tasks', tx => read<TaskRecord>(tx.objectStore('tasks'), [owner, id]))
   if (!record) return
   // A single-record read must not expand an older full snapshot's deletion scope.
   const previous = loadedForUpdate.get(owner) || new Map<string, string>()
@@ -313,8 +348,8 @@ function clearTaskPreviews(store: IDBObjectStore, owner: string, id: string) {
 export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<string, string>, options: { removeMissing?: boolean; committed?: Map<string, CreationTask> } = {}): Promise<void> {
   checkOwner(owner)
   const values = new Map(captured)
-  const committed = options.committed || new Map<string, CreationTask>()
-  const pending = (writes.get(owner) || Promise.resolve()).catch(() => {}).then(async () => {
+  return queueTaskWrite(owner, async signal => {
+    const committed = new Map<string, CreationTask>()
     for (const id of deletedTaskIds.get(owner) || []) values.delete(id)
     const previous = initialized.get(owner) || new Map<string, string>()
     const removed = options.removeMissing === false ? [] : [...previous.keys()].filter(id => !values.has(id))
@@ -324,12 +359,14 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
     if (!removed.length && !changed.length && (await read<TaskMetadata>(db.transaction('meta').objectStore('meta'), owner))?.initialized) return
     const prepared: Awaited<ReturnType<typeof prepareTask>>[] = []
     for (const [id, raw] of changed) {
+      signal.throwIfAborted()
       const item = await prepareTask(owner, raw, db, loadedForUpdate.get(owner)?.get(id) ?? previous.get(id), mediaIdentities.get(owner)?.get(id))
       if (item.record.id !== id) throw new Error('生成记录编号与快照不一致，原记录已保留。')
       prepared.push(item)
     }
     const hasAssets = prepared.some(item => item.assets.length > 0)
-    const transaction = db.transaction(['tasks', 'meta', 'previews', ...(hasAssets ? ['originals', 'contents'] : [])], 'readwrite'), done = completed(transaction)
+    signal.throwIfAborted()
+    const transaction = db.transaction(['tasks', 'meta', 'previews', ...(hasAssets ? ['originals', 'contents'] : [])], 'readwrite'), done = completed(transaction, signal)
     const records = transaction.objectStore('tasks'), writeAsset = hasAssets ? assetWriter(transaction) : undefined, previews = transaction.objectStore('previews')
     for (const id of removed) {
       records.delete([owner, id]); clearTaskPreviews(previews, owner, id)
@@ -367,6 +404,7 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
     const changedRecords = removed.length > 0 || prepared.length > 0
     updateMetadata(transaction, owner, changedRecords, { initialized: true })
     await done
+    for (const [id, task] of committed) options.committed?.set(id, task)
     if (changedRecords) { cachedReads.delete(owner); cachedStorageReads.delete(owner) }
     initialized.set(owner, options.removeMissing === false
       ? new Map([...previous, ...[...committed].map(([id, task]) => [id, JSON.stringify(task)] as const)])
@@ -377,16 +415,16 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
     for (const { record } of prepared) identities.set(record.id, record.mediaIdentity)
     mediaIdentities.set(owner, identities)
   })
-  writes.set(owner, pending)
-  return pending
 }
 export function deleteTaskRecords(owner: string, ids: readonly string[]): Promise<void> {
   checkOwner(owner)
   if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(id))) return Promise.reject(new Error('生成记录编号无效。'))
   const selected = [...new Set(ids)]
   if (!selected.length) return Promise.resolve()
-  const pending = (writes.get(owner) || Promise.resolve()).catch(() => {}).then(async () => {
-    const db = await database(), transaction = db.transaction(['tasks', 'previews', 'meta'], 'readwrite'), done = completed(transaction)
+  return queueTaskWrite(owner, async signal => {
+    const db = await database()
+    signal.throwIfAborted()
+    const transaction = db.transaction(['tasks', 'previews', 'meta'], 'readwrite'), done = completed(transaction, signal)
     const records = transaction.objectStore('tasks'), previews = transaction.objectStore('previews')
     let failure: Error | undefined
     for (const id of selected) {
@@ -408,8 +446,6 @@ export function deleteTaskRecords(owner: string, ids: readonly string[]): Promis
     for (const id of selected) { deleted.add(id); initialized.get(owner)?.delete(id); loadedForUpdate.get(owner)?.delete(id); mediaIdentities.get(owner)?.delete(id) }
     deletedTaskIds.set(owner, deleted)
   })
-  writes.set(owner, pending)
-  return pending
 }
 export function galleryOutputIndexes(task: CreationTask) {
   if (task.galleryHidden || task.kind === 'text' || task.phase !== 'complete') return []
@@ -488,21 +524,19 @@ export async function getTaskPage(owner: string, options: TaskPageQuery = {}) {
   return { tasks, ...(more && last ? { after: { createdAt: last.createdAt, id: last.id } } : {}), ...summary }
 }
 // A read can queue behind a write transaction held by another tab even after the database opens.
-async function readLocalMedia<T>(stores: string | string[], select: (transaction: IDBTransaction) => Promise<T>): Promise<T> {
-  const deadline = AbortSignal.timeout(60000)
-  let transaction: IDBTransaction | undefined
-  const cancel = () => transaction?.abort()
-  deadline.addEventListener('abort', cancel, { once: true })
+async function readLocalMedia<T>(stores: string | string[], select: (transaction: IDBTransaction) => T | Promise<T>): Promise<T> {
+  const controller = new AbortController(), deadline = controller.signal
+  const timer = setTimeout(() => controller.abort(), 60000)
   try {
     const db = await waitForToolResult(database(), deadline)
     deadline.throwIfAborted()
-    transaction = db.transaction(stores)
-    const [value] = await waitForToolResult(Promise.all([select(transaction), completed(transaction)]), deadline)
+    const transaction = db.transaction(stores)
+    const [value] = await waitForToolResult(Promise.all([select(transaction), completed(transaction, deadline)]), deadline)
     return value
   } catch (error) {
     if (deadline.aborted) throw new Error('浏览器读取本地图片超时，请关闭其它正在使用作品库的页面后重试。')
     throw error
-  } finally { deadline.removeEventListener('abort', cancel) }
+  } finally { clearTimeout(timer) }
 }
 export async function readTaskAsset(owner: string, url: string, preview = false): Promise<Blob | undefined> {
   checkOwner(owner)
@@ -518,20 +552,23 @@ export async function readTaskAsset(owner: string, url: string, preview = false)
     return blob && asset?.mime && blob.type !== asset.mime ? blob.slice(0, blob.size, asset.mime) : blob
   })
 }
-export async function saveTaskOriginal(owner: string, id: string, index: number, source: string, blob: Blob, signal?: AbortSignal): Promise<string | undefined> {
+export async function saveTaskOriginal(owner: string, id: string, index: number, source: string, blob: Blob, caller?: AbortSignal, onWriteStart?: () => void): Promise<string | undefined> {
   checkOwner(owner)
   if (!/^[A-Za-z0-9_-]{1,200}$/.test(id) || !Number.isInteger(index) || index < 0 || index > 9999
     || !/^image\/(?:png|jpeg|webp|gif|avif)$/.test(blob.type) || !blob.size || blob.size > 32 * 1024 ** 2) throw new Error('本地原图无效或超过 32 MB。')
   let saved: string | undefined
-  const pending = (writes.get(owner) || Promise.resolve()).catch(() => {}).then(async () => {
-    const hash = await identity(blob), db = await database()
-    signal?.throwIfAborted()
-    const transaction = db.transaction(['tasks', 'originals', 'contents', 'previews', 'meta'], 'readwrite'), done = completed(transaction)
+  await queueTaskWrite(owner, async signal => {
+    saved = undefined
+    const hash = await identity(blob)
+    signal.throwIfAborted()
+    const db = await database()
+    signal.throwIfAborted()
+    const transaction = db.transaction(['tasks', 'originals', 'contents', 'previews', 'meta'], 'readwrite'), done = completed(transaction, signal)
+    onWriteStart?.()
     const records = transaction.objectStore('tasks'), originals = transaction.objectStore('originals'), writeAsset = assetWriter(transaction), previews = transaction.objectStore('previews')
     const asset = { owner, key: `${id}:${index}`, taskId: id, blob, identity: hash }
     const request = records.get([owner, id]), local = taskAssetUrl(id, index)
     request.onsuccess = () => {
-      if (signal?.aborted) { transaction.abort(); return }
       const record = request.result as TaskRecord | undefined, task = record?.value
       if (!record || !task || task.kind !== 'image') return
       if (task.urls[index] === local) {
@@ -556,9 +593,7 @@ export async function saveTaskOriginal(owner: string, id: string, index: number,
     }
     await done
     if (saved) { cachedReads.delete(owner); cachedStorageReads.delete(owner) }
-  })
-  writes.set(owner, pending)
-  await pending
+  }, caller)
   return saved
 }
 function previewKey(id: string, index: number, variant: 'thumbnail' | 'display') {

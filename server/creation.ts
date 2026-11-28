@@ -25,7 +25,9 @@ import {
 } from './creation-contract.ts'
 import { fetchPublicMedia, PublicImageError, videoRangeHeaders, videoResponseHeaders, videoResponseBody } from './creation/public-media.ts'
 import { createProxyLifecycle } from './creation/proxy-lifecycle.ts'
-import { acquireImageRead, imagePreview, releaseImageRead } from './creation/image-preview.ts'
+import { imagePreview } from './creation/image-preview.ts'
+import { acquireOriginalTransfer } from './creation/original-transfer-slots.ts'
+import { streamOriginal } from './creation/stream-original.ts'
 import { videoPoster, videoPosterSourceLimit } from './creation/video-poster.ts'
 import { acquireVideoMediaBudget, budgetVideoSource, type VideoMediaBudget } from './creation/media-budget.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
@@ -1196,31 +1198,9 @@ async function readMedia(ctx: RequestContext, req: AccountRequest, svc: Creation
     const url = ctx.url.searchParams.get('url')
     if (!url || url.length > 8192) throw httpError(400, '生成文件地址无效。')
     if (kind === 'image' && variant === null) {
-      const signal = AbortSignal.any([req.signal, AbortSignal.timeout(65000)])
-      await acquireImageRead(signal)
-      try {
-        const original = await svc.publicMedia(url, 'image', 32 * MiB, signal)
-        let bytes: Buffer
-        try { bytes = Buffer.from(await original.arrayBuffer()) }
-        catch { throw httpError(502, '原图传输中断，请重试保存图片。', 'ORIGINAL_IMAGE_READ_FAILED') }
-        signal.throwIfAborted()
-        if (!bytes.length || bytes.length > 32 * MiB) throw httpError(413, '原图为空或超过 32 MB，请手动下载保存。')
-        // The upstream read deadline must not truncate a slow browser's completed image.
-        const outputSignal = AbortSignal.any([req.signal, AbortSignal.timeout(300000)])
-        // A sent Fastify reply can still have bytes queued for a slow client.
-        const completed = finished(ctx.res, { cleanup: true }).catch(() => { ctx.res.destroy() })
-        const abortResponse = () => { ctx.res.destroy() }
-        outputSignal.addEventListener('abort', abortResponse, { once: true })
-        try {
-          ctx.reply.headers({ 'Content-Type': original.headers.get('content-type') || 'application/octet-stream',
-            'Content-Length': String(bytes.length), 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }).send(bytes)
-        } catch (error) { ctx.res.destroy(); throw error }
-        finally {
-          await completed
-          outputSignal.removeEventListener('abort', abortResponse)
-        }
-        return
-      } finally { releaseImageRead() }
+      const release = await acquireOriginalTransfer(ctx.user!.accountId!, AbortSignal.any([req.signal, AbortSignal.timeout(65000)]))
+      try { return await streamOriginal(ctx, url, svc.publicMedia, req.signal) }
+      finally { release() }
     }
     response = variant === 'preview' ? await imagePreview(url, svc.publicMedia, req.signal)
       : variant === 'poster' ? await videoPoster(
