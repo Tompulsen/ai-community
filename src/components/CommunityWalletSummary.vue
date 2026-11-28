@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { combineAbortSignals } from '../abort-signals'
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
-import { ChevronDown } from '@lucide/vue'
+import { ChevronDown, Coins, Wallet } from '@lucide/vue'
 import { formatPoints, parseCommunityWalletLots, type CommunityWallet, type CommunityWalletLots } from '../../shared/studio/community-wallet'
+import { displayWalletQuota, type WalletOverview } from '../../shared/studio/wallet'
+import { loadWallet } from '../wallet-prefetch'
 import { api, errorMessage, session } from '../state'
 
 const props = defineProps<{ wallet: CommunityWallet }>()
@@ -11,9 +13,26 @@ const detailsId = useId()
 const expanded = ref(false), loading = ref(false), loaded = ref(false), error = ref('')
 const details = ref<CommunityWalletLots>({ items: [], nextCursor: null, sharedPoints: '0' })
 const currentTime = ref(Date.now())
+const balanceDisplay = ref<WalletOverview>(), balanceLoading = ref(false), balanceError = ref(false)
+const currentBalance = computed(() => balanceDisplay.value ? displayWalletQuota(props.wallet.totalApiQuota, balanceDisplay.value) : null)
 const identity = () => `${session.user?.id || ''}:${session.user?.accountId || session.user?.id || ''}`
 let revision = 0, active = true, lastRefresh = 0, controller: AbortController | undefined
+let balanceRevision = 0
 let timer: ReturnType<typeof setInterval> | undefined
+async function loadBalanceDisplay(force = false) {
+  const owner = identity(), current = ++balanceRevision
+  balanceLoading.value = true; balanceError.value = false
+  try {
+    const display = await loadWallet('topup', force)
+    if (!active || current !== balanceRevision || owner !== identity()) return
+    if (displayWalletQuota(props.wallet.totalApiQuota, display) === null) throw new Error('余额展示暂不可用')
+    balanceDisplay.value = display
+  } catch {
+    if (active && current === balanceRevision && owner === identity()) { balanceDisplay.value = undefined; balanceError.value = true }
+  } finally {
+    if (active && current === balanceRevision && owner === identity()) balanceLoading.value = false
+  }
+}
 const expirySeconds = computed(() => props.wallet.charityExpiringAt === null ? null : Math.max(0, Math.ceil((props.wallet.charityExpiringAt * 1000 - currentTime.value) / 1000)))
 function countdown(expiresAt: number) {
   const seconds = Math.max(0, Math.ceil((expiresAt * 1000 - currentTime.value) / 1000))
@@ -65,9 +84,11 @@ function updateTime() {
   }
 }
 watch(identity, () => { resetDetails(); expanded.value = false }, { flush: 'sync' })
+watch(identity, () => { balanceDisplay.value = undefined; void loadBalanceDisplay() }, { immediate: true, flush: 'sync' })
 watch(() => props.wallet, () => {
   resetDetails(); currentTime.value = Date.now()
   if (expanded.value) void loadDetails()
+  void loadBalanceDisplay()
 })
 onMounted(() => {
   timer = setInterval(updateTime, 1000)
@@ -75,7 +96,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', updateTime)
 })
 onBeforeUnmount(() => {
-  active = false; resetDetails(); clearInterval(timer)
+  active = false; balanceRevision++; resetDetails(); clearInterval(timer)
   window.removeEventListener('focus', updateTime)
   document.removeEventListener('visibilitychange', updateTime)
 })
@@ -84,14 +105,15 @@ onBeforeUnmount(() => {
 <template>
   <section class="community-wallet-summary" aria-label="社区积分">
     <dl class="point-balances">
-      <div><dt><button v-if="wallet.charityDetailsAvailable" type="button" class="welfare-toggle" :aria-expanded="expanded" :aria-controls="detailsId" @click="toggleDetails">福利积分<ChevronDown :size="14" aria-hidden="true" /></button><template v-else>福利积分</template></dt><dd class="point-amount">{{ formatPoints(wallet.charityPoints) }}<span>积分</span></dd></div>
-      <div><dt>永久积分</dt><dd class="point-amount">{{ formatPoints(wallet.permanentPoints) }}<span>积分</span></dd></div>
+      <div class="points-stat"><dt><Coins :size="16" aria-hidden="true" /><button v-if="wallet.charityDetailsAvailable" type="button" class="welfare-toggle" :aria-expanded="expanded" :aria-controls="detailsId" @click="toggleDetails">积分<ChevronDown :size="14" aria-hidden="true" /></button><template v-else>积分</template></dt><dd class="point-amount">{{ formatPoints(wallet.charityPoints) }}<span>积分</span></dd><dd class="balance-caption">抽奖、签到等福利积分</dd></div>
+      <div class="balance-stat" :aria-busy="balanceLoading"><dt><Wallet :size="16" aria-hidden="true" />当前余额</dt><dd class="point-amount">{{ currentBalance ?? (balanceLoading ? '正在读取…' : '—') }}</dd><dd v-if="balanceError" class="balance-caption"><button type="button" class="text-link" :disabled="balanceLoading" @click="loadBalanceDisplay(true)">余额读取失败，重试</button></dd><dd v-else class="balance-caption balance-source">与账户中心一致</dd></div>
     </dl>
     <p v-if="wallet.charityExpiringAt !== null" class="welfare-expiry">
       <template v-if="expirySeconds"><template v-if="wallet.charityExpiringPoints">其中 {{ formatPoints(wallet.charityExpiringPoints) }} 积分</template><template v-else>有福利积分</template>将在 <time role="timer" aria-live="off" :datetime="`PT${expirySeconds}S`">{{ countdown(wallet.charityExpiringAt) }}</time> 后过期</template>
       <template v-else>部分福利积分已到期，正在刷新余额。</template>
     </p>
     <div v-show="expanded" :id="detailsId" class="welfare-details" aria-label="福利积分明细">
+      <p class="welfare-details-title">福利积分明细</p>
       <p v-if="error" class="form-error" role="alert">{{ error }} <button type="button" class="text-link" :disabled="loading" @click="loadDetails()">重新读取</button></p>
       <p v-if="loading && !loaded" class="muted" role="status">正在读取福利明细…</p>
       <ul v-if="details.items.length" class="welfare-lots">
@@ -106,18 +128,23 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .community-wallet-summary { min-width: 0; width: 100%; }
-.point-balances { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 0; }
-.point-balances > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; max-width: 100%; }
-.point-balances dt { flex: none; color: var(--muted); font-size: 12px; line-height: 24px; }
-.point-balances .point-amount { min-width: 0; margin: 0; color: var(--ink); font-size: 18px; line-height: 24px; font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.point-balances dd > span { margin-left: 4px; font-size: 12px; font-weight: 400; white-space: nowrap; }
-.welfare-toggle { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; margin-block: -10px; padding: 0; color: var(--muted); font: inherit; }
+.point-balances { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; max-width: 680px; margin: 0; padding-block: 8px; }
+.point-balances > div { display: grid; align-content: start; gap: 8px; min-width: 0; }
+.point-balances > div + div { border-left: 1px solid var(--border); padding-left: 24px; }
+.point-balances dt { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; line-height: 24px; }
+.point-balances dt > svg { flex: none; }
+.point-balances .point-amount { min-width: 0; margin: 0; color: var(--ink); font-size: clamp(20px, 2.4vw, 28px); line-height: 1.3; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.point-amount > span { margin-left: 6px; font-size: 12px; font-weight: 400; white-space: nowrap; color: var(--muted); }
+.point-balances .balance-caption { margin: 0; color: var(--muted); font-size: 12px; line-height: 20px; }
+.balance-caption .text-link { min-height: 44px; text-align: left; }
+.welfare-toggle { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; margin-block: -10px; padding: 0; color: inherit; font: inherit; }
 .welfare-toggle:hover, .welfare-toggle[aria-expanded="true"] { color: var(--ink); }
 .welfare-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .welfare-toggle[aria-expanded="true"] > svg { transform: rotate(180deg); }
 .welfare-expiry { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
 .welfare-expiry time { font-variant-numeric: tabular-nums; }
 .welfare-details { margin-top: 12px; font-size: 12px; line-height: 20px; }
+.welfare-details-title { margin: 0 0 4px; font-weight: 500; color: var(--ink); }
 .welfare-lots { list-style: none; margin: 0; padding: 0; }
 .welfare-lots li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 12px; padding-block: 8px; border-bottom: 1px solid var(--border); }
 .welfare-lots li > * { min-width: 0; overflow-wrap: anywhere; }
@@ -125,4 +152,16 @@ onBeforeUnmount(() => {
 .welfare-validity { grid-column: 1 / -1; color: var(--muted); font-variant-numeric: tabular-nums; }
 .welfare-shared { margin-top: 8px; color: var(--muted); }
 .welfare-details > .text-link { min-height: 44px; }
+@media (max-width: 639px) {
+  .point-balances { gap: 12px; }
+  .point-balances > div + div { padding-left: 12px; }
+}
+@media (max-width: 359px) {
+  .point-balances { grid-template-columns: minmax(0, 1fr); gap: 8px; padding-block: 4px; }
+  .point-balances > div { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0 8px; }
+  .point-balances > div + div { border-left: 0; border-top: 1px solid var(--border); padding: 8px 0 0; }
+  .point-balances .point-amount { font-size: 18px; text-align: right; }
+  .point-balances .balance-caption { grid-column: 1 / -1; }
+  .point-balances .balance-source { display: none; }
+}
 </style>

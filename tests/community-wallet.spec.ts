@@ -2,6 +2,85 @@ import AxeBuilder from '@axe-core/playwright'
 import { expect, test } from '@playwright/test'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
+const balanceDisplay = {
+  userId: 17, currencySymbol: '✦', quotaPerUnit: 500000, quotaDisplayType: 'CUSTOM', creditExchangeRate: 1,
+  topup: { enabled: false, redemptionEnabled: false, minAmount: 1, amountOptions: [], paymentMethods: [] },
+  plans: [], subscriptions: [], history: [], historyTotal: 0,
+}
+
+test('New API balance recovers from display-setting failure and keeps points separate across viewports', async ({ page }, info) => {
+  await mockUnifiedAccount(page, true)
+  let fail = true, reads = 0
+  await page.route('**/api/account', route => route.fulfill({ json: {
+    linked: true, subject: '17', walletEnabled: true, accountUrl: 'https://accounts.example', points: {
+      enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: '1857.87', permanentPoints: '32412709.8',
+      legacyApiQuota: 3241270980, paidApiQuota: 0, totalApiQuota: 3241270980, charityExpiringAt: null,
+    },
+  } }))
+  await page.route('**/api/new-api/wallet/topup', route => {
+    reads++
+    return route.fulfill(fail ? { status: 503, json: { message: '余额显示配置暂不可用' } } : { json: { success: true, data: balanceDisplay } })
+  })
+  await page.goto('/account?tab=balance')
+  const summary = page.locator('.community-wallet-summary')
+  await expect(summary.locator('.balance-stat .point-amount')).toHaveText('—')
+  await expect(summary.locator('.points-stat .point-amount')).toHaveText('1,857.87积分')
+  await expect(page.locator('.account-balance').first()).toHaveText('32,414,567.67 积分')
+  const beforeRetry = reads
+  fail = false
+  await summary.getByRole('button', { name: '余额读取失败，重试' }).click()
+  await expect(summary.locator('.balance-stat .point-amount')).toHaveText('✦ 6,482.54')
+  expect(reads).toBe(beforeRetry + 1)
+  await expect(summary).not.toContainText('永久积分')
+  await page.locator('.account-wallet').getByRole('button', { name: '重新读取', exact: true }).click()
+  await expect(page.locator('.account-wallet')).not.toContainText('余额显示配置暂不可用')
+  for (const mode of ['light', 'dark'] as const) {
+    await page.evaluate(value => window.communityAppearance.set({ mode: value }), mode)
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: width === 320 ? 667 : 900 })
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await expect(summary.locator('.balance-stat .point-amount')).toBeInViewport({ ratio: 1 })
+      await page.screenshot({ path: info.outputPath(`balance-display-${mode}-${width}.png`) })
+    }
+  }
+  expect((await new AxeBuilder({ page }).include('.community-wallet-summary').analyze()).violations).toEqual([])
+})
+
+test('account switches discard delayed balance settings and reuse the new account wallet read', async ({ page }) => {
+  const fixture = await mockUnifiedAccount(page, true)
+  let release!: () => void
+  const delayed = new Promise<void>(done => { release = done })
+  const reads: string[] = [], errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.route('**/api/account', route => {
+    const second = fixture.state.user.accountId === '18'
+    return route.fulfill({ json: { linked: true, subject: fixture.state.user.accountId, walletEnabled: true, points: {
+      enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: second ? '20' : '10', permanentPoints: second ? '5000' : '32414550',
+      legacyApiQuota: second ? 500000 : 3241455000, paidApiQuota: 0, totalApiQuota: second ? 500000 : 3241455000, charityExpiringAt: null,
+    } } })
+  })
+  await page.route('**/api/new-api/wallet/topup', async route => {
+    const owner = route.request().headers()['x-new-api-user']!
+    reads.push(owner)
+    if (owner === '17') await delayed
+    await route.fulfill({ json: { success: true, data: { ...balanceDisplay, userId: Number(owner), creditExchangeRate: owner === '18' ? 7 : 1, currencySymbol: owner === '18' ? '¥' : '✦' } } })
+  })
+  await page.goto('/account?tab=balance')
+  const summary = page.locator('.community-wallet-summary')
+  await expect(summary.locator('.balance-stat .point-amount')).toHaveText('正在读取…')
+  expect(reads).toEqual(['17'])
+  fixture.state.user = { ...fixture.state.user, id: 'secondAccount', accountId: '18' }
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(summary.locator('.balance-stat .point-amount')).toHaveText('¥ 7')
+  const response = page.waitForResponse(value => value.url().endsWith('/wallet/topup') && value.request().headers()['x-new-api-user'] === '17')
+  release()
+  await response
+  await expect(summary.locator('.balance-stat .point-amount')).toHaveText('¥ 7')
+  await expect(summary.locator('.points-stat .point-amount')).toHaveText('20积分')
+  expect(reads).toEqual(['17', '18'])
+  expect(errors).toEqual([])
+})
+
 for (const authenticated of [true, false]) test(`lottery displays welfare prizes and preserves permanent historical rewards for ${authenticated ? 'members' : 'guests'}`, async ({ page }) => {
   await mockUnifiedAccount(page, authenticated)
   await page.route('**/api/new-api/status', route => route.fulfill({ json: { success: true,
@@ -71,9 +150,9 @@ test('welfare details stay collapsed, show per-batch deadlines and refresh exact
   const summary = page.getByRole('region', { name: '社区积分', exact: true })
   await expect(summary.locator('.point-balances > div')).toHaveCount(2)
   await expect(summary.locator('.welfare-expiry')).toContainText('其中 500 积分将在 00:01:00 后过期')
-  await expect(summary.getByRole('button', { name: '福利积分' })).toHaveAttribute('aria-expanded', 'false')
+  await expect(summary.getByRole('button', { name: '积分', exact: true })).toHaveAttribute('aria-expanded', 'false')
   expect(requests).toBe(0)
-  await summary.getByRole('button', { name: '福利积分' }).click()
+  await summary.getByRole('button', { name: '积分', exact: true }).click()
   await expect(summary.getByRole('alert')).toContainText('福利明细暂不可用')
   fail = false
   await summary.getByRole('button', { name: '重新读取' }).click()
@@ -163,9 +242,9 @@ test('community points keep exact amounts, restrictions and unavailable state on
   const summary = page.getByRole('region', { name: '社区积分', exact: true })
   await expect(summary).toBeVisible()
   await expect(summary).toContainText('123,456,789,012,345,678.123456')
-  await expect(summary).toContainText('5,000.000001')
+  await expect(summary).toContainText('¥ 2')
   await expect(summary).toContainText('福利积分')
-  await expect(summary).toContainText('永久积分')
+  await expect(summary).not.toContainText('永久积分')
   await expect(summary.locator('.point-note, .points-rule')).toHaveCount(0)
   await expect(summary).not.toContainText('共用余额')
   await expect(summary).not.toContainText('最近一批到期：')

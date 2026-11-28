@@ -49,7 +49,7 @@ for (const mode of ['light', 'dark']) for (const width of [320, 390, 1440]) test
   await page.goto('/activities?tab=tasks')
   const list = page.getByRole('list', { name: '社区福利任务' })
   await expect(list.getByRole('heading')).toHaveText(['邀请', '用户发作品', '敬请期待未开放'])
-  await expect(list).toContainText('你得 7,200 · 好友得 3,600 永久积分')
+  await expect(list).toContainText('你得 7,200 · 好友得 3,600 积分')
   await expect(list).toContainText('任意一笔充值实际支付大于 0')
   await expect(list).toContainText('发布 1 个作品，获得 1 次抽奖机会')
   await expect(list).toContainText('今日进度：0 / 1 个作品')
@@ -80,7 +80,7 @@ test('live rules, single-work and total likes, pauses and fractional referral va
   await expect(list).toContainText('每收获 8 位关注者，获得 2 次抽奖机会')
   await expect(list).toContainText('当前关注者：9 人')
   await expect(list).toContainText('发布本身不直接赠送积分')
-  await expect(list).toContainText('你得 0 · 好友得 0.25 永久积分')
+  await expect(list).toContainText('你得 0 · 好友得 0.25 积分')
   await expect(list).toContainText('实付满 ¥8.88')
   state.referral.config.enabled = false
   state.lottery.settings.likesMode = 'total'

@@ -306,7 +306,7 @@ test('winning feedback confirms the exact receipt and rereads the actual wallet 
   await expect(dialog.locator('.feedback-awards')).toContainText('1,000.123456 福利积分')
   await expect(dialog.locator('.feedback-awards')).toContainText('已到账')
   await expect(dialog.locator('.feedback-total')).toHaveText('6,100.123456 积分')
-  await expect(dialog).toContainText('永久积分5,000')
+  await expect(dialog).toContainText('账户积分5,000')
   await expect(dialog).not.toContainText('尚未到账')
   expect(balanceReads).toBeGreaterThan(beforeCredit)
   expect(receiptReads).toHaveLength(1)

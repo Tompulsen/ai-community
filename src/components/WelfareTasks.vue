@@ -84,7 +84,7 @@ defineExpose({ refresh: load })
             <template v-if="item.id === 'invite'">
               <template v-if="invitation">
                 <template v-if="invitation.config.enabled">
-                  <p class="task-award">你得 <strong>{{ points(invitation.config.inviterPoints) }}</strong> · 好友得 <strong>{{ points(invitation.config.inviteePoints) }}</strong> 永久积分</p>
+                  <p class="task-award">你得 <strong>{{ points(invitation.config.inviterPoints) }}</strong> · 好友得 <strong>{{ points(invitation.config.inviteePoints) }}</strong> 积分</p>
                   <p class="task-condition">新朋友通过邀请链接注册后，任意一笔充值{{ invitation.config.minTopupCny > 0 ? `实付满 ¥${invitation.config.minTopupCny.toFixed(2)}` : '实际支付大于 0' }}，双方自动获奖。</p>
                 </template>
                 <p v-if="!invitation.config.enabled" class="task-condition">已绑定邀请仍按绑定时的规则发放。</p>

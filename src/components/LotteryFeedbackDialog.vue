@@ -128,7 +128,7 @@ onBeforeUnmount(() => {
             <p v-if="walletLoading || accountBalance.loading" class="feedback-note">正在更新积分余额…</p>
             <template v-else-if="walletReady && accountBalance.points">
               <strong class="feedback-total">{{ balancePoints }} <small>积分</small></strong>
-              <dl><div><dt>福利积分</dt><dd>{{ formatPoints(accountBalance.points.charityPoints) }}</dd></div><div><dt>永久积分</dt><dd>{{ formatPoints(accountBalance.points.permanentPoints) }}</dd></div></dl>
+              <dl><div><dt>福利积分</dt><dd>{{ formatPoints(accountBalance.points.charityPoints) }}</dd></div><div><dt>账户积分</dt><dd>{{ formatPoints(accountBalance.points.permanentPoints) }}</dd></div></dl>
             </template>
             <template v-else>
               <p class="feedback-note">{{ accountBalance.error || '当前积分余额暂不可用，请刷新或到积分账户查看。' }}</p>

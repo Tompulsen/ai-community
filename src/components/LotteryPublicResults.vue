@@ -80,7 +80,7 @@ defineExpose({ refresh: () => load(), loading })
     <template v-if="data">
       <p class="public-range" role="status"><CalendarDays :size="16" aria-hidden="true" /><span>{{ rangeLabel }}</span><span class="muted">北京时间</span><time :datetime="data.updatedAt" class="muted">更新于 {{ new Date(data.updatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) }}</time></p>
       <dl class="public-overview">
-        <div class="public-total"><dt><Coins :size="18" aria-hidden="true" />{{ data.range.period === 'today' ? '今日已发放积分' : '所选期间已发放积分' }}</dt><dd>{{ formatPoints(data.totals.totalPoints) }}<small>积分</small></dd><dd class="public-detail">福利积分 {{ formatPoints(data.totals.charityPoints) }}<span>永久积分 {{ formatPoints(data.totals.permanentPoints) }}</span></dd></div>
+        <div class="public-total"><dt><Coins :size="18" aria-hidden="true" />{{ data.range.period === 'today' ? '今日已发放积分' : '所选期间已发放积分' }}</dt><dd>{{ formatPoints(data.totals.totalPoints) }}<small>积分</small></dd><dd class="public-detail">福利积分 {{ formatPoints(data.totals.charityPoints) }}<span>账户积分 {{ formatPoints(data.totals.permanentPoints) }}</span></dd></div>
         <div><dt>抽奖总次数</dt><dd>{{ formatPoints(data.totals.drawCount) }}<small>次</small></dd><dd class="public-detail">按抽奖发生日期统计</dd></div>
         <div><dt>参与用户</dt><dd>{{ formatPoints(data.totals.participantCount) }}<small>位</small></dd><dd class="public-detail">期间抽奖或收到奖励</dd></div>
       </dl>
@@ -100,7 +100,7 @@ defineExpose({ refresh: () => load(), loading })
           <table aria-labelledby="lottery-users-title"><thead><tr><th scope="col">参与用户</th><th scope="col" :aria-sort="sort.startsWith('points') ? sort.endsWith('asc') ? 'ascending' : 'descending' : undefined">已到账积分</th><th scope="col" :aria-sort="sort.startsWith('draws') ? sort.endsWith('asc') ? 'ascending' : 'descending' : undefined">抽奖次数</th><th scope="col">奖励状态</th></tr></thead><tbody>
             <tr v-for="record in visible" :key="record.id">
               <td data-label="参与用户"><strong>{{ record.participant }}</strong></td>
-              <td data-label="已到账积分"><div class="public-points"><strong>{{ formatPoints(record.totalPoints) }} 积分</strong><p class="muted">福利积分 {{ formatPoints(record.charityPoints) }}<br>永久积分 {{ formatPoints(record.permanentPoints) }}</p></div></td>
+              <td data-label="已到账积分"><div class="public-points"><strong>{{ formatPoints(record.totalPoints) }} 积分</strong><p class="muted">福利积分 {{ formatPoints(record.charityPoints) }}<br>账户积分 {{ formatPoints(record.permanentPoints) }}</p></div></td>
               <td data-label="抽奖次数"><strong>{{ formatPoints(record.drawCount) }} 次</strong></td>
               <td data-label="奖励状态"><ul class="public-award-status"><li>已到账 {{ formatPoints(record.fulfilledCount) }} 次</li><li v-if="record.pendingCount !== '0'">待发放 {{ formatPoints(record.pendingCount) }} 次</li><li v-if="record.unverifiedCount !== '0'">待核对 {{ formatPoints(record.unverifiedCount) }} 次</li><li v-if="record.emptyCount !== '0'">未中奖 {{ formatPoints(record.emptyCount) }} 次</li></ul></td>
             </tr>

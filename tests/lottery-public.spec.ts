@@ -82,7 +82,7 @@ for (const [width, mode] of [[320, 'dark'], [390, 'light'], [1440, 'dark'], [144
   await expect(panel.locator('tbody tr')).toHaveCount(3)
   await expect(panel).toContainText('6,100 积分')
   await expect(panel).toContainText('福利积分 2,000')
-  await expect(panel).toContainText('永久积分 4,100')
+  await expect(panel).toContainText('账户积分 4,100')
   await expect(panel).toContainText('12 次')
   await expect(panel).toContainText('待发放 1 次')
   await expect(panel).toContainText('待核对 2 次')
