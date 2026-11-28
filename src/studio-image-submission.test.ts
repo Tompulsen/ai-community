@@ -356,12 +356,15 @@ it('automatically follows a server request ID without treating it as an upstream
   expect(api).toHaveBeenCalledWith(`/api/creation/requests/${task.id}`, expect.anything())
   expect(p.send).toHaveBeenCalledTimes(1)
 })
-it('reads a completed server result when returning after the local polling deadline', async () => {
+it('waits for a manual check before reading an old server result after the local polling deadline', async () => {
   const p = await fixture(), { api } = await import('./state')
   const original = await p.submitCreation(p.input)
   vi.mocked(api).mockResolvedValue({ status: 'succeeded', outputs: [{ url: 'https://media.example/finished-hours-ago.png' }] })
   await restoreTasks(p, [{ ...original, createdAt: Date.now() - 4 * 60 * 60_000, phase: 'running', serverTracked: true, urls: [] }])
-  await vi.waitFor(() => expect(p.creation.tasks[0]).toMatchObject({ phase: 'complete', urls: ['https://media.example/finished-hours-ago.png'] }))
+  expect(api).not.toHaveBeenCalled()
+  expect(p.creation.tasks[0]).toMatchObject({ id: original.id, phase: 'paused' })
+  await p.resumeCreation(p.creation.tasks[0]!)
+  expect(p.creation.tasks[0]).toMatchObject({ phase: 'complete', urls: ['https://media.example/finished-hours-ago.png'] })
   expect(api).toHaveBeenCalledWith(`/api/creation/requests/${original.id}`, expect.anything())
   expect(p.send).toHaveBeenCalledTimes(1)
 })
@@ -559,7 +562,7 @@ it.each([0, 504])('keeps the original submission failure after %s across restora
   const error = status ? 'Gateway timeout 504' : 'Failed to fetch'
   const original = await p.submitCreation(p.input)
   await restoreTasks(p, [{ ...original }])
-  await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(2))
+  expect(api).toHaveBeenCalledTimes(1)
   expect(p.creation.tasks[0]).toMatchObject({ id: original.id, phase: 'attention', submissionError: status ? `社区提交接口失败（HTTP 504）：${error}` : `提交到社区失败：${error}` })
   expect(p.creation.tasks[0]!.error).toContain(error)
   expect(p.creation.tasks[0]!.error).not.toContain('没有找到此请求记录')
@@ -741,8 +744,9 @@ it.each(['attention', 'submitting', 'paused'])('retains the original ID of a res
   vi.mocked(api).mockRejectedValue(Object.assign(new Error('没有找到此请求记录。'), { status: 404 }))
   p.session.user = user
   await p.initializeCreation()
-  await vi.waitFor(() => expect(api).toHaveBeenCalledWith(`/api/creation/requests/${task.id}`, expect.anything()))
-  await vi.waitFor(() => expect(p.creation.tasks[0]).toMatchObject({ id: task.id, phase: 'attention', error: '连接中断' }))
+  expect(api).not.toHaveBeenCalled()
+  await p.resumeCreation(p.creation.tasks[0]!)
+  expect(p.creation.tasks[0]).toMatchObject({ id: task.id, phase: 'attention', error: '连接中断' })
   expect(api).toHaveBeenCalledWith(`/api/creation/requests/${task.id}`, expect.anything())
   expect((await p.submitCreation(p.input)).phase).toBe('complete')
   expect(p.send).toHaveBeenCalledTimes(2)
@@ -755,7 +759,7 @@ it('shows an asynchronous media error while retaining the original task ID', asy
   expect(p.creationRequestTimedOut(task)).toBe(false)
   expect(p.send).toHaveBeenCalledTimes(1)
 })
-it('restores every pending media task while limiting active GETs and releasing slots between polls', async () => {
+it('limits concurrent manual status checks and releases slots between polls', async () => {
   const p = await fixture(), { api } = await import('./state')
   const original = await p.submitCreation(p.input)
   const saved = Array.from({ length: 5 }, (_, index) => ({
@@ -776,6 +780,8 @@ it('restores every pending media task while limiting active GETs and releasing s
   vi.useFakeTimers()
   await restoreTasks(p, saved)
   try {
+    expect(reads).toHaveLength(0)
+    for (const task of p.creation.tasks) void p.resumeCreation(task)
     await vi.advanceTimersByTimeAsync(0)
     expect(reads).toHaveLength(4)
     expect(active).toBe(4)
@@ -804,6 +810,7 @@ it('cancels queued recovery GETs on account change and releases capacity for the
   }))
   await restoreTasks(p, saved)
   try {
+    for (const task of p.creation.tasks) void p.resumeCreation(task)
     await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(4))
     p.session.user = { id: 'other-owner', accountId: '18' } as any
     const { nextTick } = await import('vue')
@@ -844,6 +851,7 @@ it('skips a stopped queued recovery without preventing the next task from being 
   vi.useFakeTimers()
   await restoreTasks(p, saved)
   try {
+    for (const task of p.creation.tasks) void p.resumeCreation(task)
     await vi.advanceTimersByTimeAsync(0)
     expect(api).toHaveBeenCalledTimes(4)
     p.stopCreation(p.creation.tasks[4]!)

@@ -4,6 +4,7 @@ import { mockUnifiedAccount } from './helpers/account-fixture'
 import AxeBuilder from '@axe-core/playwright'
 
 const dock = (page: Page) => page.getByRole('complementary', { name: '后台生成任务', exact: true })
+const signedIn = (page: Page) => expect.poll(() => page.evaluate(async () => (await import('/src/state.ts')).session.user?.id)).toBe('17')
 
 for (const width of [320, 390, 1440]) test(`remix choices stay on the work and restore keyboard focus at ${width}px`, async ({ page }, info) => {
   await page.setViewportSize({ width, height: 844 })
@@ -149,12 +150,13 @@ async function fixture(page: Page, initialPath = '/create/image', kind: 'image' 
     } }))
   }, history)
   await page.goto(initialPath)
-  await expect.poll(() => page.evaluate(async () => {
+  if (initialPath.startsWith('/create')) await expect.poll(() => page.evaluate(async () => {
     const path = performance.getEntriesByType('resource').map(entry => entry.name).filter(name => /\/src\/native-studio\.ts(?:\?|$)/.test(name)).at(-1)
     if (!path) return false
     const studio = await import(/* @vite-ignore */ path)
     return studio.creation.loaded && studio.creation.tasks.some(task => task.id === 'already-completed')
   })).toBe(true)
+  else await signedIn(page)
   return { finish, submissions: () => submissions, requests, controls, source, account }
 }
 
@@ -191,22 +193,18 @@ test('previously completed history stays quiet in the community and after reload
 
 for (const phase of ['error', 'attention'] as const) test(`historical ${phase} stays quiet after reload and signing back in`, async ({ page }) => {
   const state = await fixture(page, '/discover', 'image', { phase, recovery: 'missing' })
-  const settled = () => page.evaluate(async () => {
-    const { creation } = await import('/src/native-studio.ts')
-    return creation.loaded && ['error', 'attention'].includes(creation.tasks.find(task => task.id === 'already-completed')?.phase || '')
-  })
-  await expect.poll(settled).toBe(true)
   await expect(dock(page)).toHaveCount(0)
   await page.reload()
-  await expect.poll(settled).toBe(true)
+  await signedIn(page)
   await expect(dock(page)).toHaveCount(0)
   state.account.state.authenticated = false; state.account.state.accountAuthenticated = false
   await page.reload()
   await expect(dock(page)).toHaveCount(0)
   state.account.state.authenticated = true; state.account.state.accountAuthenticated = true
   await page.reload()
-  await expect.poll(settled).toBe(true)
+  await signedIn(page)
   await expect(dock(page)).toHaveCount(0)
+  expect(state.controls.recoveries).toBe(0)
   expect(state.submissions()).toBe(0)
 })
 
@@ -241,7 +239,7 @@ for (const disconnect of [false, true]) test(`closing a new ${disconnect ? 'conn
     await page.reload()
     state.account.state.authenticated = true; state.account.state.accountAuthenticated = true
     await page.reload()
-    await expect.poll(() => page.evaluate(async () => (await import('/src/native-studio.ts')).creation.loaded)).toBe(true)
+    await signedIn(page)
     await expect(dock(page)).toHaveCount(0)
     expect(state.submissions()).toBe(1)
     const stored = await page.evaluate(async () => (await (await import('/src/studio-task-store.ts')).readTaskSnapshot('17')) || [])
@@ -249,16 +247,20 @@ for (const disconnect of [false, true]) test(`closing a new ${disconnect ? 'conn
   } finally { state.finish() }
 })
 
-for (const pending of [false, true]) test(`recovering an in-flight history task ${pending ? 'keeps server-confirmed pending progress and then' : 'immediately'} reports completion once`, async ({ page }) => {
+for (const pending of [false, true]) test(`a saved task stays paused until a manual check ${pending ? 'follows server progress' : 'finds its result'}`, async ({ page }) => {
   const state = await fixture(page, '/discover', 'image', { phase: 'running', recovery: pending ? 'pending' : 'succeeded' })
+  await expect(dock(page)).toHaveCount(0)
+  expect(state.controls.recoveries).toBe(0)
+  await page.goto('/create/image?reuse=already-completed')
+  const query = page.getByRole('button', { name: '查询原结果', exact: true })
+  await expect(query).toBeVisible()
+  expect(state.controls.recoveries).toBe(0)
+  await query.click()
   if (pending) {
-    await expect(dock(page)).toContainText('正在生成')
+    await expect(page.locator('.task-status')).toContainText('正在生成')
     state.controls.recoveryPending = false
   }
   await completeImage(page, '以前已经看过的图片')
-  await expect(dock(page)).toContainText('生成完成')
-  await dock(page).getByRole('button', { name: '查看结果', exact: true }).click()
-  await expect(page).toHaveURL(/\/create\/image/)
   await leaveWorkbench(page)
   await page.reload()
   await expect(page.locator('.app-header')).toBeVisible()
@@ -323,7 +325,7 @@ test('deleting an in-flight conversation does not restore it or its failed remin
     await leaveWorkbench(page)
     await expect(dock(page)).toHaveCount(0)
     state.finish()
-    await expect.poll(() => page.evaluate(async prompt => (await import('/src/native-studio.ts')).creation.tasks.find(task => task.prompt === prompt)?.phase, prompt)).toBe('error')
+    await expect.poll(() => page.evaluate(async id => (await (await import('/src/studio-task-store.ts')).readTaskForUpdate('17', id))?.phase, state.requests[0].requestId)).toBe('error')
     await expect(dock(page)).toHaveCount(0)
     await page.goto('/create/image')
     await expect(page.locator('.creation-request').filter({ hasText: prompt })).toHaveCount(0)
@@ -628,9 +630,7 @@ for (const outcome of ['succeeded', 'failed'] as const) test(`the browser reads 
   expect({ localQueries, gatewayQueries, submissions: state.requests.length }).toEqual({ localQueries: 1, gatewayQueries: 0, submissions: 1 })
 })
 
-for (const width of [390, 1440]) for (const outcome of ['succeeded', 'failed'] as const) test(`a missing video reminder closes and recovers the upstream ${outcome} result at ${width}px`, async ({ page }, info) => {
-  let studioModule = ''
-  page.on('request', request => { if (/\/src\/native-studio\.ts(?:\?|$)/.test(request.url())) studioModule = request.url() })
+for (const width of [390, 1440]) for (const outcome of ['succeeded', 'failed'] as const) test(`a missing video reminder stays closed until a manual check returns the upstream ${outcome} result at ${width}px`, async ({ page }, info) => {
   await page.setViewportSize({ width, height: 900 })
   const state = await fixture(page, '/work/backgroundsource', 'video')
   let queries = 0, finished = false
@@ -664,39 +664,24 @@ for (const width of [390, 1440]) for (const outcome of ['succeeded', 'failed'] a
   expect(queries).toBe(1)
   expect(state.requests).toHaveLength(1)
   finished = true
-  // Delayed async-component mounting must not lose a recovery that already completed.
-  const delayedDock = outcome === 'succeeded' && width === 1440
-  if (delayedDock) await page.route('**/src/components/BackgroundStudio.vue*', async route => {
-    if (new URL(route.request().url()).searchParams.has('vue')) return route.continue()
-    const response = await route.fetch()
-    await route.fulfill({ response, body: await response.text() + '\nawait new Promise(resolve => { window.__releaseBackgroundMount = resolve })' })
-  })
   await page.reload()
-  await expect(page.locator('.app-header')).toBeVisible()
-  if (delayedDock) {
-    await expect.poll(() => queries).toBe(2)
-    await expect.poll(() => page.evaluate(() => typeof (window as any).__releaseBackgroundMount)).toBe('function')
-    await expect.poll(() => page.evaluate(async ({ path, id }) => {
-      const { creation } = await import(/* @vite-ignore */ path)
-      return creation.tasks.some(task => task.id === id && task.phase === 'complete') && !creation.restoringTaskIds.has(id)
-    }, { path: studioModule, id: state.requests[0].requestId })).toBe(true)
-    await page.evaluate(() => (window as any).__releaseBackgroundMount())
-  }
-  if (outcome === 'succeeded') {
-    await expect(dock(page)).toContainText('生成完成')
-    await dock(page).getByRole('button', { name: '查看结果', exact: true }).click()
-  } else {
-    await expect(dock(page)).toHaveCount(0)
-    await page.goto(`/create/video?reuse=${state.requests[0].requestId}`)
-  }
-  expect(queries).toBe(2)
+  await signedIn(page)
+  await expect(dock(page)).toHaveCount(0)
+  expect(queries).toBe(1)
+  await page.goto(`/create/video?reuse=${state.requests[0].requestId}`)
+  const query = page.getByRole('button', { name: '查询原结果', exact: true })
+  await expect(query).toBeVisible()
+  expect(queries).toBe(1)
+  await query.click()
   await expect(page.locator('.task-status')).toContainText(outcome === 'succeeded' ? '生成完成' : '生成失败')
+  expect(queries).toBe(2)
   if (outcome === 'failed') await expect(page.locator('.task-message')).toContainText('上游审核未通过：参考图不符合要求。')
   expect(state.requests).toHaveLength(1)
 })
 
 test('closing a failed reminder leaves the running task and keeps the selected task stable', async ({ page }) => {
-  const state = await fixture(page, '/discover')
+  const state = await fixture(page)
+  await leaveWorkbench(page)
   const path = await page.evaluate(() => performance.getEntriesByType('resource').map(entry => entry.name).filter(name => /\/src\/native-studio\.ts(?:\?|$)/.test(name)).at(-1)!)
   await page.clock.install()
   const update = async (action: 'seed' | 'fail' | 'insert') => page.evaluate(async ({ action, path }) => {

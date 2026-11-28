@@ -117,8 +117,6 @@ export const creation = reactive({
   requestContractVersion: 1 as 1 | 2,
   groupsLoading: false, groupSwitching: false, groupsError: '', modelLaunchPending: undefined as Promise<void> | undefined,
   tasks: [] as CreationTask[], selectedId: '', loaded: false, storageError: '', historyRevision: 0,
-  restoringTaskIds: new Set<string>(),
-  recoveredTaskIds: new Set<string>(),
 })
 export const mediaSettings = reactive({ autoDownload: false, autoSaveGallery: true, loaded: false })
 const controllers = new Map<string, AbortController>()
@@ -687,7 +685,7 @@ function delay(signal: AbortSignal, duration: number) {
     if (signal.aborted) abort()
   })
 }
-// Waiting between polls must leave capacity for every restored task.
+// Only active requests occupy a query slot between polling timers.
 let activeTaskQueries = 0
 const waitingTaskQueries: (() => void)[] = []
 async function queryCreationTask(path: string, task: CreationTask, controller: Pick<AbortController, 'signal'>, version: number) {
@@ -785,9 +783,6 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
     }
     if (epoch !== version || controller.signal.aborted) return
     const finished = applyResult(task, data)
-    // A history lookup becomes a live reminder only after confirmed progress or a recovered result.
-    if (task.phase === 'complete' && creation.restoringTaskIds.has(task.id)) creation.recoveredTaskIds.add(task.id)
-    if (!finished || task.phase === 'complete') creation.restoringTaskIds.delete(task.id)
     deadline = task.deadline ?? deadline
     await persist(task)
     if (finished) { if (task.phase === 'complete') notify('生成完成，可在创作台查看结果。'); return }
@@ -921,7 +916,7 @@ export function documentModelEnded(task: CreationTask) {
   return task.purpose === 'document' && task.kind === 'text' && task.phase === 'attention'
     && ['indeterminate', 'expired', 'succeeded'].includes(task.resultStatus || '')
 }
-export async function resumeCreation(task: CreationTask, restoring = false) {
+export async function resumeCreation(task: CreationTask) {
   if (task.owner !== activeOwner() || controllers.has(task.id) || task.phase === 'complete' || task.phase === 'error' || documentModelEnded(task)) return
   if (creationRequestTimedOut(task) && !task.serverTracked) return
   if (!task.upstreamId && task.legacy) return
@@ -929,7 +924,6 @@ export async function resumeCreation(task: CreationTask, restoring = false) {
   if (task.legacy && task.tokenId == null) { task.phase = 'attention'; task.error = '此历史任务缺少原始令牌编号，已保留记录，请先核对原任务。'; await persist(task); return }
   if (!task.upstreamId && !task.serverTracked && task.error) task.submissionError ||= task.error
   const controller = new AbortController(), version = epoch
-  if (restoring) creation.restoringTaskIds.add(task.id)
   controllers.set(task.id, controller); task.phase = 'running'; task.error = ''; task.errorCode = undefined; task.settledAt = undefined
   try {
     await poll(task, controller, version)
@@ -941,9 +935,7 @@ export async function resumeCreation(task: CreationTask, restoring = false) {
       await persist(task)
     }
   } finally {
-    if (epoch === version && controllers.get(task.id) === controller) {
-      controllers.delete(task.id); creation.restoringTaskIds.delete(task.id)
-    }
+    if (epoch === version && controllers.get(task.id) === controller) controllers.delete(task.id)
   }
 }
 export async function retryCreationSave(task: CreationTask) {
@@ -1348,10 +1340,6 @@ export function initializeCreation() {
     })
     await persist(changed, true).catch(() => {})
     if (Array.isArray(fallback) && !creation.storageError) localStorage.removeItem(key + ':v2-fallback')
-    const pending = creation.tasks.filter(item => (item.upstreamId && item.phase === 'paused' || ['paused', 'attention'].includes(item.phase) && !item.legacy)
-      && !item.customApiBase && (!item.legacy || item.tokenId != null))
-    // poll already limits active GETs and yields its slot between attempts.
-    for (const task of pending) void resumeCreation(task, true).catch(() => {})
   })().finally(() => { if (version === epoch) booting = undefined })
   return booting
 }
@@ -1814,8 +1802,6 @@ watch(() => accountIdentity(), () => {
   for (const key of Object.keys(localMedia)) { if (localMedia[key]?.startsWith('blob:')) URL.revokeObjectURL(localMedia[key]); delete localMedia[key] }
   mediaLoads.clear()
   creation.tasks = []; creation.selectedId = ''; creation.loaded = false
-  creation.restoringTaskIds.clear()
-  creation.recoveredTaskIds.clear()
   creation.historyRevision++
   mediaSettings.loaded = false; mediaSettings.autoDownload = false; mediaSettings.autoSaveGallery = true
   if (next) {
@@ -1832,5 +1818,4 @@ watch(() => accountIdentity(), () => {
   groupRead = undefined; groupSelection = undefined
   creation.groups = []; creation.selectedGroup = null; creation.modelTokenId = null
   creation.groupsLoading = false; creation.groupSwitching = false; creation.groupsError = ''
-  if (next) void initializeCreation()
-}, { immediate: true })
+}, { immediate: true, flush: 'sync' })

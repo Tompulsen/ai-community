@@ -3,7 +3,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Grip, LoaderCircle, Minus, X } from '@lucide/vue'
-import { creation, initializeCreation, readCreationImage, type CreationTask } from '../native-studio'
+import { creation, readCreationImage, type CreationTask } from '../native-studio'
 import { errorMessage, session } from '../state'
 
 const route = useRoute(), router = useRouter()
@@ -16,15 +16,8 @@ const studioPage = computed(() => route.path === '/create' || route.path.startsW
 const active = (phase: string) => ['submitting', 'running'].includes(phase)
 const labels = { submitting: '正在提交', running: '正在生成', complete: '生成完成', error: '生成失败', paused: '已停止等待', attention: '结果待确认' }
 const chatState = shallowRef<typeof import('../native-chat').chats>()
-watch(() => session.user?.id, async owner => {
-  chatState.value = undefined
-  if (!owner) return
-  await initializeCreation()
-  if (owner !== session.user?.id) return
-  const { chats, loadChats } = await import('../native-chat')
-  if (owner !== session.user?.id) return
-  await loadChats()
-  if (owner === session.user?.id) chatState.value = chats
+watch(() => creation.loaded, async loaded => {
+  if (loaded && !chatState.value) chatState.value = (await import('../native-chat')).chats
 }, { immediate: true })
 const deletedTasks = computed(() => new Set(chatState.value?.sessions.flatMap(chat => chat.deletedMediaTaskIds || [])))
 const deletedConversations = computed(() => new Set(chatState.value?.deletedMediaConversationIds))
@@ -35,22 +28,16 @@ function visible(value: CreationTask) {
 watch(() => ({
   owner: session.user?.id, studio: studioPage.value,
   phases: new Map(creation.tasks.filter(item => item.owner === session.user?.id).map(item => [item.id, item.phase])),
-  restoring: new Set(creation.restoringTaskIds),
 }), (current, previous) => {
   if (current.owner !== previous?.owner) { hidden.value = false; selectedId.value = ''; point.value = undefined; error.value = ''; stopDrag() }
   if (!current.owner || current.owner !== previous?.owner || current.studio) unread.value = []
   else {
-    const settled = [...current.phases].filter(([id, phase]) => !active(phase) && !current.restoring.has(id)
-      && (active(previous?.phases.get(id) || '') || phase === 'complete' && previous?.restoring.has(id))).map(([id]) => id)
+    const settled = [...current.phases].filter(([id, phase]) => !active(phase) && active(previous?.phases.get(id) || '')).map(([id]) => id)
     unread.value = [...new Set([...unread.value, ...settled])].filter(id => current.phases.has(id))
   }
-  // Recovery can finish before this async component mounts; consume this page's events once.
-  const recovered = [...creation.recoveredTaskIds].filter(id => current.phases.get(id) === 'complete' && !current.restoring.has(id))
-  if (current.owner && !current.studio) unread.value = [...new Set([...unread.value, ...recovered])]
-  for (const id of recovered) creation.recoveredTaskIds.delete(id)
 }, { immediate: true, flush: 'sync' })
 const tasks = computed(() => creation.tasks.filter(item => item.owner === session.user?.id && visible(item)
-  && !creation.restoringTaskIds.has(item.id) && (active(item.phase) || unread.value.includes(item.id))))
+  && (active(item.phase) || unread.value.includes(item.id))))
 const task = computed(() => tasks.value.find(item => item.id === selectedId.value) || tasks.value[0])
 const preview = ref('')
 watch([() => session.user?.id, () => !hidden.value && !studioPage.value && task.value?.kind === 'image' && task.value.phase === 'complete' ? task.value.urls[0] : undefined], ([, url], _, cleanup) => {

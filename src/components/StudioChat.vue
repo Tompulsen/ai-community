@@ -223,7 +223,7 @@ watch(() => session.user?.id, async () => {
   if (props.entryOnly) { entryChat.value = createEmptyChat(); model.value = '' }
   if (!session.user) return
   const preparingRemix = props.remixPreparing
-  await initializeCreation()
+  if (!props.entryOnly) await initializeCreation()
   if (!preparingRemix && props.mode === 'text') { await loadCreationGroups(); await loadCreationModels() }
   if (!props.entryOnly) await loadChats()
 }, { immediate: true })

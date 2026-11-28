@@ -326,7 +326,7 @@ function applySourceReferences(files: WorkFile[]) {
 watch(() => session.user?.id, async () => {
   if (!session.user) return
   const preparingRemix = props.remixPreparing
-  await initializeCreation()
+  if (!props.entryOnly) await initializeCreation()
   // CreateView owns configuration restoration while preparing a remix.
   if (!preparingRemix) { await loadCreationGroups(); await loadCreationModels(); chooseModel() }
 }, { immediate: true })

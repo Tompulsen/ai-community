@@ -56,7 +56,7 @@ async function fixture(page: Page) {
   })
   return { ...account, calls, image, uploads: () => uploads }
 }
-test('refresh restores a pending server task and returns its result without resubmitting', async ({ page }) => {
+test('a pending task can be checked after refresh without resubmitting', async ({ page }) => {
   await fixture(page)
   let submissions = 0, queries = 0, requestId = '', finished = false
   await page.route('**/api/creation/generate', route => {
@@ -77,6 +77,9 @@ test('refresh restores a pending server task and returns its result without resu
   await expect.poll(() => queries).toBe(1)
   await expect(page.locator('.task-status')).toContainText('正在生成中')
   await page.reload()
+  await expect(page.locator('.task-status')).toContainText('已停止等待')
+  expect(queries).toBe(1)
+  await page.getByRole('button', { name: '查询原结果', exact: true }).click()
   await expect.poll(() => queries).toBe(2)
   finished = true
   await expect.poll(async () => {
@@ -265,20 +268,21 @@ test('a slow image request keeps the sent prompt, elapsed time and editor usable
 
 test('an active video task keeps the existing generating status until the result arrives', async ({ page }, info) => {
   await fixture(page)
-  let submissions = 0, queries = 0, taskQueries = 0, finished = false, downloading = false, reportedProgress: number | undefined
+  let submissions = 0, obsoleteQueries = 0, taskQueries = 0, finished = false, downloading = false, reportedProgress: number | undefined
   await page.route('**/api/creation/generate', route => {
     submissions++
     return route.fulfill({ json: { status: 'pending', upstreamId: 'waiting-video', tokenId: 83, protocol: 'async', outputs: [] } })
   })
-  await page.route('**/api/creation/tasks/video/waiting-video?*', route => {
+  await page.route('**/api/creation/requests/**', route => {
+    expect(new URL(route.request().url()).searchParams.get('upstreamId')).toBe('waiting-video')
     taskQueries++
     return route.fulfill({ json: finished
       ? { status: 'succeeded', outputs: [{ url: 'https://media.example/video.mp4' }] }
       : { status: 'pending', upstreamId: 'waiting-video', tokenId: 83, protocol: 'async', outputs: [], progress: reportedProgress,
         ...(downloading ? { stage: 'downloading' } : {}) } })
   })
-  await page.route('**/api/creation/requests/**', route => {
-    queries++
+  await page.route('**/api/creation/tasks/**', route => {
+    obsoleteQueries++
     return route.fulfill({ status: 404, json: { message: 'Unexpected recovery query' } })
   })
   await page.goto('/create/video')
@@ -312,13 +316,15 @@ test('an active video task keeps the existing generating status until the result
   await page.clock.fastForward(5000)
   await expect(page.locator('.task-status')).toContainText('下载中')
   await page.reload()
+  await expect(page.locator('.task-status')).toContainText('已停止等待')
+  await page.getByRole('button', { name: '查询原结果', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('下载中')
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toBeVisible()
   await page.screenshot({ path: info.outputPath('video-downloading-390.png') })
   finished = true
   await page.clock.fastForward(5000)
   await expect(page.locator('.task-status')).toContainText('生成完成')
-  expect({ submissions, queries }).toEqual({ submissions: 1, queries: 0 })
+  expect({ submissions, obsoleteQueries }).toEqual({ submissions: 1, obsoleteQueries: 0 })
 })
 
 for (const [shape, file] of [['landscape', 'poster-black-intro.mp4'], ['portrait', 'portrait-preview.mp4']] as const) {
@@ -427,7 +433,7 @@ test('a lost submission response automatically checks the original request witho
   await expect(page.locator('.task-status')).toContainText('请求异常')
   await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
   expect((await nativeHistory(page))[0]).toMatchObject({ id: requestId, phase: 'attention' })
-  expect({ submissions, recoveries }).toEqual({ submissions: 1, recoveries: 2 })
+  expect({ submissions, recoveries }).toEqual({ submissions: 1, recoveries: 1 })
   await page.getByRole('button', { name: '清除上下文', exact: true }).last().click()
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('同会话继续发送')
   await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
@@ -621,7 +627,7 @@ test('asynchronous video waits can stop and recover with GET using the original 
     submissions++
     return route.fulfill({ json: { status: 'pending', upstreamId: 'upstream-video', tokenId: 83, protocol: 'async', outputs: [], progress: 20 } })
   })
-  await page.route('**/api/creation/tasks/video/**', route => {
+  await page.route('**/api/creation/requests/**', route => {
     queries++; queryMetadata.push(new URL(route.request().url()).searchParams)
     return route.fulfill({ json: queries === 1
       ? { status: 'pending', upstreamId: 'upstream-video', tokenId: 83, protocol: 'async', progress: 35, outputs: [] }
@@ -634,13 +640,16 @@ test('asynchronous video waits can stop and recover with GET using the original 
   await expect.poll(() => queries).toBe(1)
   await page.getByRole('button', { name: '停止等待', exact: true }).click()
   await expect(page.locator('.task-message')).toContainText('上游任务可能仍在执行')
-  await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeEnabled()
   await page.reload()
+  await expect(page.locator('.task-status')).toContainText('已停止等待')
+  expect(queries).toBe(1)
+  await page.getByRole('button', { name: '查询原结果', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
   expect(submissions).toBe(1)
   expect(queries).toBe(2)
   for (const query of queryMetadata) {
+    expect(query.get('upstreamId')).toBe('upstream-video')
     expect(query.get('protocol')).toBe('async')
     expect(query.get('tokenId')).toBe('83')
   }
@@ -708,7 +717,7 @@ test('an unsuccessful media response stays in history without a query or an auto
   await page.reload()
   await expect(page.locator('.task-status')).toContainText('请求异常')
   await expect(page.locator('.task-message')).toHaveText('上游响应中断')
-  expect({ submissions, queries }).toEqual({ submissions: 1, queries: 1 })
+  expect({ submissions, queries }).toEqual({ submissions: 1, queries: 0 })
 })
 
 test('legacy tasks without the original token stay untouched while base64 image results still render', async ({ page }) => {

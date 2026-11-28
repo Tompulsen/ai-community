@@ -43,12 +43,14 @@ async function shutdownFixture(t, mode) {
         const name = args[0].toLowerCase()
         commands.push({ id, name })
         if (name === 'info') socket.write('$11\r\nloading:0\r\n\r\n')
+        else if (name === 'zrangebyscore') socket.write('*0\r\n')
         else if (name === 'get' && mode === 'drain') {
           releaseRead = () => socket.write('$-1\r\n')
           pendingRead.resolve()
         } else if (name === 'get') socket.write('$-1\r\n')
+        else if (name === 'ping' && mode === 'startup-ping-quit-error') socket.write('-ERR fixture ping failure\r\n')
         else if (name === 'ping') socket.write('+PONG\r\n')
-        else if (name === 'quit' && id === 2 && mode === 'quit-error') socket.write('-ERR fixture quit failure\r\n')
+        else if (name === 'quit' && (id === 2 && mode === 'quit-error' || mode === 'startup-ping-quit-error')) socket.write('-ERR fixture quit failure\r\n')
         else if (name === 'quit') socket.end('+OK\r\n')
         else socket.write('+OK\r\n')
       }
@@ -70,13 +72,26 @@ import { createRequire } from 'node:module'
 const require = createRequire(${JSON.stringify(new URL('../package.json', import.meta.url).href)})
 require('pg').Pool = class {
   on() {}
-  async query() { return { rows: [{ ok: 1 }] } }
+  async query(sql) {
+    if (${JSON.stringify(mode)} === 'startup-table' && sql.includes('community_creation_request')) throw new Error('fixture table missing')
+    return sql.includes('community_creation_request') ? { rows: [], rowCount: 0 } : { rows: [{ ok: 1 }] }
+  }
   async end() { console.log('PG_ENDED') }
 }
 const { start } = await import(${JSON.stringify(new URL('./runtime.ts', import.meta.url).href)})
 const { getNewApiRedis } = await import(${JSON.stringify(new URL('./native-account/session.ts', import.meta.url).href)})
-const app = await start()
 const mode = ${JSON.stringify(mode)}
+process.on('beforeExit', () => console.log('NATURAL_BEFORE_EXIT'))
+let app
+try { app = await start() }
+catch (error) {
+  if (!mode.startsWith('startup-')) throw error
+  console.log('EXPECTED_STARTUP_FAILURE')
+  process.send({ ready: true })
+  process.disconnect()
+}
+if (app) {
+if (mode.startsWith('startup-')) throw new Error('Expected startup to fail')
 const headers = { cookie: 'octopus_new_api_session=' + 'a'.repeat(43) }
 if (mode === 'lazy') getNewApiRedis()
 else if (mode === 'drain') {
@@ -89,11 +104,12 @@ process.once('message', () => {
   if (process.platform === 'win32') process.emit('SIGTERM')
   else process.kill(process.pid, 'SIGTERM')
 })
-process.on('beforeExit', () => console.log('NATURAL_BEFORE_EXIT'))
 process.send({ ready: true })
+}
 `)
   child = fork(fixture, [], { cwd: projectRoot, execArgv: [], stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: {
-    ...process.env, CONFIG_PATH: config, FILES_ROOT: directory, PORT: '0', HOST: '127.0.0.1',
+    ...process.env, CONFIG_PATH: config, FILES_ROOT: directory, PORT: mode === 'startup-listen' ? '-1' : '0', HOST: '127.0.0.1',
+    COMMUNITY_REQUEST_STORE: mode === 'startup-table' ? '1' : '0', COMMUNITY_REQUEST_V2: '0', COMMUNITY_REQUEST_V2_ACCOUNTS: '',
     DISABLE_LOTTERY_WORKER: '1', DISABLE_MEDIA_WORKER: '1', COMMUNITY_WALLET_ENABLED: 'false',
     NEW_API_BASE_URL: 'http://127.0.0.1:1', NEW_API_PUBLIC_URL: 'http://127.0.0.1:1',
     NEW_API_SESSION_SECRET: 'isolated-shutdown-secret-32-characters', NEW_API_REDIS_URL: `redis://127.0.0.1:${port}`,
@@ -161,3 +177,16 @@ test('account Redis quit failure closes its socket and reports a nonzero natural
   assert.match(result.stdout, /NATURAL_BEFORE_EXIT/)
   assert.equal(fixture.sockets.size, 0)
 })
+
+for (const mode of ['startup-table', 'startup-ping-quit-error', 'startup-listen']) {
+  test(`${mode} releases connections and workers before naturally exiting`, { timeout: 15000 }, async t => {
+    const fixture = await shutdownFixture(t, mode)
+    const result = await fixture.result()
+    assert.equal(result.code, 0, result.stderr)
+    assert.equal(result.signal, null)
+    assert.match(result.stdout, /EXPECTED_STARTUP_FAILURE/)
+    assert.match(result.stdout, /PG_ENDED/)
+    assert.match(result.stdout, /NATURAL_BEFORE_EXIT/)
+    assert.equal(fixture.sockets.size, 0)
+  })
+}

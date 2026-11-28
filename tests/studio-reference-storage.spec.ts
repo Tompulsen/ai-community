@@ -136,7 +136,7 @@ test('partial updates preserve unloaded tasks, other-tab edits, deletions and sh
 })
 
 async function lobby(page: Page) {
-  await page.goto('/discover')
+  await page.goto('/create/image')
   await expect.poll(() => page.evaluate(async () => (await import('/src/native-studio.ts')).creation.loaded)).toBe(true)
 }
 
