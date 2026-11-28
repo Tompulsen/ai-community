@@ -60,7 +60,7 @@ const owner = () => `${session.user?.id || ''}:${session.user?.accountId || ''}`
 const conversations = computed(() => {
   const keyword = query.value.trim().toLowerCase()
   if (!keyword) return chats.sessions
-  return chats.sessions.filter(chat => `${chat.topic} ${chat.messages.map(message => typeof message.content === 'string' ? message.content : message.content.filter(part => part.type === 'text').map(part => part.text || '').join(' ')).join(' ')}`.toLowerCase().includes(keyword))
+  return chats.sessions.filter(chat => `${chat.topic} ${chat.messages.map(message => typeof message.content === 'string' ? message.content : Array.isArray(message.content) ? message.content.filter(part => part.type === 'text').map(part => typeof part.text === 'string' ? part.text : '').join(' ') : '').join(' ')}`.toLowerCase().includes(keyword))
 })
 const groups = computed(() => [
   ...chats.projects.map(project => ({ id: project.id, name: project.name, items: conversations.value.filter(chat => chat.projectId === project.id) })),

@@ -27,7 +27,7 @@ it('removes selected IDs in one save and preserves the active chat and untouched
   expect(p.chats.activeId).toBe('b')
   expect(p.chats.sessions[0]!.draft).toBe('draft-b')
   expect(storage.write).toHaveBeenCalledTimes(1)
-  expect(storage.write.mock.calls[0]).toMatchObject(['octopus:user-17:native-chat', { state: { activeId: 'b' } }])
+  expect(storage.write.mock.calls[0]).toMatchObject(['octopus:user-17:native-chat', { state: { activeId: 'b' } }, [{ id: 'a' }, { id: 'c' }]])
 })
 it('chooses the neighboring remaining chat after removing the active chat', async () => {
   const p = await fixture()

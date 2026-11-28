@@ -1,4 +1,5 @@
-import { get } from "./studio-keyval.ts";
+import { chatAssetKey as assetKey, chatAssetReference as referenceId, loadChatAssets as loadAssets, restoreChatAssets, knownChatAsset, rememberChatAssets, forgetChatAssets } from "./chat-assets.ts";
+export { hasDeferredChatAssets, restoreChatAssets, loadChatSessionAssets } from "./chat-assets.ts";
 import { nanoid } from "nanoid";
 import { indexedDBStorage } from "./indexedDB-storage.ts";
 
@@ -6,7 +7,7 @@ const FORMAT = "octopus-chat-assets-v1";
 const MIN_ASSET_LENGTH = 64 * 1024;
 const META = "__octopusChatAssets";
 const REFERENCE = "__octopusChatAsset";
-let knownAssets: { name: string; values: Map<string, string> } | undefined;
+
 
 type ChatSnapshot = {
   state: Record<string, any>;
@@ -15,12 +16,9 @@ type ChatSnapshot = {
 type AssetMetadata = { format: typeof FORMAT; ids: string[] };
 type ReadOptions = {
   deferInactiveSessions?: boolean;
+  deferAllSessionAssets?: boolean;
   retryOnChange?: boolean;
 };
-
-function assetKey(name: string, id: string) {
-  return `${name}:asset:${id}`;
-}
 
 function metadata(value: any): AssetMetadata | undefined {
   const stored = value?.[META];
@@ -46,82 +44,11 @@ function isPayload(value: string, key: string, parent: any) {
   );
 }
 
-function referenceId(value: any): string | undefined {
-  return value &&
-    typeof value === "object" &&
-    Object.keys(value).length === 1 &&
-    typeof value[REFERENCE] === "string"
-    ? value[REFERENCE]
-    : undefined;
-}
-
-function visitReferences(value: any, visit: (id: string) => void) {
-  const id = referenceId(value);
-  if (id !== undefined) {
-    visit(id);
-  } else if (value && typeof value === "object") {
-    for (const child of Object.values(value)) visitReferences(child, visit);
-  }
-}
-
-export function hasDeferredChatAssets(value: unknown): boolean {
-  if (referenceId(value) !== undefined) return true;
-  return (
-    !!value &&
-    typeof value === "object" &&
-    Object.values(value).some(hasDeferredChatAssets)
-  );
-}
-
-export function restoreChatAssets<T>(value: T, loaded: Map<string, string>): T {
-  const id = referenceId(value);
-  if (id !== undefined) return (loaded.get(id) ?? value) as T;
-  if (!value || typeof value !== "object") return value;
-  if (Array.isArray(value)) {
-    const restored = value.map((child) => restoreChatAssets(child, loaded));
-    return restored.every((child, index) => child === value[index])
-      ? value
-      : (restored as T);
-  }
-  const entries = Object.entries(value);
-  const restored = entries.map(([key, child]) => [
-    key,
-    restoreChatAssets(child, loaded),
-  ]);
-  return restored.every(([, child], index) => child === entries[index][1])
-    ? value
-    : (Object.fromEntries(restored) as T);
-}
-
-async function loadAssets(name: string, ids: Iterable<string>) {
-  const loaded = new Map<string, string>();
-  await Promise.all(
-    [...ids].map(async (id) => {
-      const value = await get<unknown>(assetKey(name, id));
-      if (typeof value !== "string")
-        throw new Error(
-          "Local chat attachment is missing; existing data was preserved.",
-        );
-      loaded.set(id, value);
-    }),
-  );
-  return loaded;
-}
-
-export async function loadChatSessionAssets(name: string, session: unknown) {
-  const ids = new Set<string>();
-  visitReferences(session, (id) => ids.add(id));
-  const loaded = await loadAssets(name, ids);
-  if (knownAssets?.name !== name) knownAssets = { name, values: new Map() };
-  for (const [id, value] of loaded) knownAssets.values.set(value, id);
-  return loaded;
-}
-
 export async function readChatSnapshot(
   name: string,
   options: ReadOptions = {},
 ): Promise<ChatSnapshot | null> {
-  if (knownAssets?.name !== name) knownAssets = undefined;
+
   const raw = await indexedDBStorage.getItem(name);
   if (!raw) return null;
   const stored = JSON.parse(raw);
@@ -132,10 +59,11 @@ export async function readChatSnapshot(
   const allowed = new Set(assets.ids);
   const sessions = stored.state?.sessions;
   const defer =
-    options.deferInactiveSessions &&
-    stored.version >= 3.5 &&
+    (options.deferInactiveSessions || options.deferAllSessionAssets) &&
     Array.isArray(sessions);
-  const selected = Number.isInteger(stored.state?.currentSessionIndex)
+  const selected = typeof stored.state?.activeId === "string"
+    ? sessions?.findIndex((session: { id?: string }) => session.id === stored.state.activeId) ?? -1
+    : Number.isInteger(stored.state?.currentSessionIndex)
     ? Math.min(
         Math.max(0, stored.state.currentSessionIndex),
         sessions?.length - 1,
@@ -154,8 +82,8 @@ export async function readChatSnapshot(
           for (const [key, child] of Object.entries(session))
             collect(
               child,
-              index === selected ||
-                (key !== "messages" && key !== "messageBranches"),
+              !options.deferAllSessionAssets && (index === selected ||
+                (key !== "messages" && key !== "messageBranches")),
             );
         });
       } else {
@@ -178,17 +106,14 @@ export async function readChatSnapshot(
   }
   const snapshot = restoreChatAssets(stored, loaded);
   delete snapshot[META];
-  knownAssets = {
-    name,
-    values: new Map([...loaded].map(([id, value]) => [value, id])),
-  };
+  rememberChatAssets(name, loaded);
   return snapshot;
 }
 
-export async function writeChatSnapshot(name: string, snapshot: ChatSnapshot) {
+export async function writeChatSnapshot(name: string, snapshot: ChatSnapshot, undo?: unknown) {
   if (!snapshot.state?._hasHydrated) return;
-  if (knownAssets?.name !== name) knownAssets = undefined;
-  const known = knownAssets?.name === name ? knownAssets.values : undefined;
+
+
   const current = new Map<string, string>();
   const retained = new Set<string>();
   const encode = (value: any, key = "", parent?: any): any => {
@@ -200,7 +125,7 @@ export async function writeChatSnapshot(name: string, snapshot: ChatSnapshot) {
     if (typeof value === "string" && isPayload(value, key, parent)) {
       let id = current.get(value);
       if (!id) {
-        id = known?.get(value);
+        id = knownChatAsset(name, value);
         id ??= nanoid();
         current.set(value, id);
       }
@@ -217,6 +142,8 @@ export async function writeChatSnapshot(name: string, snapshot: ChatSnapshot) {
     );
   };
   const encodedSnapshot = encode(snapshot);
+  // A short-lived undo window must retain unread payloads without loading them.
+  if (undo) encode(undo);
   const payloadIds = new Set(current.values());
   const encoded = {
     ...encodedSnapshot,
@@ -234,12 +161,12 @@ export async function writeChatSnapshot(name: string, snapshot: ChatSnapshot) {
       .filter((id) => !payloadIds.has(id))
       .map((id) => assetKey(name, id)),
   );
-  knownAssets = { name, values: current };
+  rememberChatAssets(name, new Map([...current].map(([value, id]) => [id, value])));
 }
 
 export async function removeChatSnapshot(name: string) {
   await indexedDBStorage.removeItemWithAssets(name, (raw) =>
     referencedAssets(name, raw),
   );
-  if (knownAssets?.name === name) knownAssets = undefined;
+  forgetChatAssets(name);
 }

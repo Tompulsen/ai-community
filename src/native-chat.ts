@@ -3,6 +3,8 @@ import { api, errorMessage, session } from './state'
 import { creation, portableImage, resumeCreation, stopCreation, submitCreation, type CreationTask } from './native-studio'
 import { configuredModelFormat, modelFormat } from './model-preferences'
 import { readChatSnapshot, writeChatSnapshot } from '../shared/studio/chat-persistence'
+import { cloneChatValue, copyChatAssets, deferChatAssets, forgetChatAssets, hasDeferredChatAssets, loadChatSessionAssets, restoreChatAssets, retainChatAssets } from '../shared/studio/chat-assets'
+import { notifyBrowserStorageChanged, notifyBrowserStorageFailure } from './browser-storage'
 import { createDeferredWriteQueue } from '../shared/studio/latest-write-queue'
 import { initializeBranches, createAnswerBranch, createEditedMessageBranch, selectAnswerBranch, deleteBranchMessage, cloneBranchMessages, branchMessages } from '../shared/studio/chat-branches'
 import { prepareContext } from '../shared/studio/context-budget'
@@ -86,16 +88,20 @@ export const chats = reactive({
   sessions: [] as NativeChat[], activeId: '', ready: false, error: '', busy: {} as Record<string, boolean>, skills: [] as Skill[],
   preparing: {} as Record<string, boolean>,
   initialSaving: {} as Record<string, boolean>,
+  assetsLoading: {} as Record<string, boolean>,
   projects: [] as ChatProject[], deletedMediaConversationIds: [] as string[], mediaConversationsMigrated: false,
 })
 export const chatDeletion = reactive({ count: 0, expiresAt: 0 })
 type DeletedChats = { owner: string; deleted: { chat: NativeChat; index: number }[]; order: string[]; activeId: string; nextId: string; fallbackId?: string; tombstones: string[] }
 let deletedChats: DeletedChats | undefined, deleteTimer: ReturnType<typeof setTimeout> | undefined
+const deletingChats = new Set<NativeChat>()
 function clearDeletedChats() {
   clearTimeout(deleteTimer); deleteTimer = undefined; deletedChats = undefined
   chatDeletion.count = 0; chatDeletion.expiresAt = 0
 }
 let epoch = 0, loading: Promise<void> | undefined
+let assetStore = '', displayedChatId: string | undefined
+const assetReads = new Map<NativeChat, { controller: AbortController; promise: Promise<void> }>()
 const draftStates = new WeakMap<NativeChat, { draft: string; files: NativeChat['draftFiles']; quote: NativeChat['draftQuote']; image: NativeChat['mediaDraft']; video: NativeChat['mediaDraft'] }>()
 const dirtyDrafts = new Map<NativeChat, string>()
 function rememberDraft(chat: NativeChat) {
@@ -183,11 +189,15 @@ function restoreDraftCheckpoint(key: string, acceptedOwner: string) {
   return recovered
 }
 function createChatWrites() {
-  return createDeferredWriteQueue(async ({ key, snapshot }: { key: string; snapshot: Parameters<typeof writeChatSnapshot>[1] }) => {
+  return createDeferredWriteQueue(async ({ key, snapshot, assetSource, retainedChats }: { key: string; snapshot: Parameters<typeof writeChatSnapshot>[1]; assetSource: string; retainedChats: NativeChat[] }) => {
     const checkpoint = readDraftCheckpoint(key)
     const changed = [...dirtyDrafts].filter(([, accepted]) => `octopus:user-${accepted}:native-chat` === key).map(([chat]) => [chat, chat.draftUpdatedAt] as const)
-    const frozen = JSON.parse(JSON.stringify(snapshot))
-    await writeChatSnapshot(key, frozen)
+    const frozen = cloneChatValue(snapshot), retained = cloneChatValue(retainedChats), source = assetSource
+    if (source && source !== key) await copyChatAssets(source, key, [frozen, retained])
+    if (retained.length) await writeChatSnapshot(key, frozen, retained)
+    else await writeChatSnapshot(key, frozen)
+    notifyBrowserStorageChanged()
+    if (key === store()) assetStore = key
     const saved = new Map<string, NativeChat>(frozen.state.sessions.map((chat: NativeChat) => [chat.id, chat]))
     if (checkpoint?.value?.owner && key === `octopus:user-${checkpoint.value.owner}:native-chat` && Array.isArray(checkpoint.value.drafts) &&
       checkpoint.value.drafts.every((value: any) => {
@@ -200,6 +210,8 @@ function createChatWrites() {
       })) clearDraftCheckpoint(key, checkpoint.raw)
     for (const [chat, updatedAt] of changed) if (chat.draftUpdatedAt === updatedAt) dirtyDrafts.delete(chat)
     if (key === store()) for (const id of Object.keys(chats.initialSaving)) if (saved.has(id)) delete chats.initialSaving[id]
+    if (key === store() && displayedChatId !== undefined) releaseInactiveChatAssets(displayedChatId)
+    else if (key !== store()) forgetChatAssets(key)
   }, 200)
 }
 let writes = createChatWrites()
@@ -210,6 +222,41 @@ const toolControllers = new Map<string, AbortController>()
 const owner = () => session.user?.id || ''
 const store = () => `octopus:user-${owner()}:native-chat`
 const registeredChat = (chat: NativeChat) => chats.ready && chats.sessions.some(item => item.id === chat.id)
+export function chatAssetsReady(chat: NativeChat) { return !hasDeferredChatAssets(chat) }
+export function ensureChatAssets(chat: NativeChat): Promise<void> {
+  if (!owner() || !chats.ready || !chats.sessions.includes(chat)) return Promise.reject(new Error('当前对话已变化，请重新选择。'))
+  if (chatAssetsReady(chat)) return Promise.resolve()
+  const pending = assetReads.get(chat)
+  if (pending && !pending.controller.signal.aborted) return pending.promise
+  const version = epoch, accepted = owner(), controller = new AbortController()
+  chats.assetsLoading[chat.id] = true
+  const promise = (async () => {
+    const loaded = await loadChatSessionAssets(assetStore || store(), chat, controller.signal)
+    if (version !== epoch || accepted !== owner() || !chats.sessions.includes(chat)) throw new DOMException('Account changed', 'AbortError')
+    Object.assign(chat, restoreChatAssets(chat, loaded))
+    draftStates.set(chat, { draft: chat.draft || '', files: chat.draftFiles, quote: chat.draftQuote, image: chat.mediaDrafts?.image, video: chat.mediaDrafts?.video })
+    if (!chatAssetsReady(chat)) throw new Error('对话附件已变化，请重新读取。原始记录已保留。')
+  })().finally(() => {
+    if (assetReads.get(chat)?.controller === controller) {
+      assetReads.delete(chat)
+      if (version === epoch) delete chats.assetsLoading[chat.id]
+    }
+  })
+  assetReads.set(chat, { controller, promise })
+  return promise
+}
+export function releaseInactiveChatAssets(activeId = chats.activeId) {
+  displayedChatId = activeId
+  const key = assetStore || store()
+  for (const chat of chats.sessions) {
+    if (chat.id === activeId || conversationGenerating(chat)) continue
+    assetReads.get(chat)?.controller.abort()
+    if ((typeof chat.draft === 'string' ? chat.draft.trim() : hasDeferredChatAssets(chat.draft)) || chat.draftFiles?.length || chat.draftQuote || dirtyDrafts.has(chat) ||
+      [chat.mediaDraft, ...Object.values(chat.mediaDrafts || {})].some(draft => (typeof draft?.prompt === 'string' ? draft.prompt.trim() : hasDeferredChatAssets(draft?.prompt)) || draft?.references?.length)) continue
+    Object.assign(chat, deferChatAssets(key, chat))
+  }
+  retainChatAssets(key, [chats.sessions, deletedChats?.deleted, [...deletingChats]])
+}
 export function conversationMediaTasks(chat: NativeChat): CreationTask[] {
   const ids = new Set((branchMessages(chat) as NativeMessage[]).flatMap(message => message.taskId ? [message.taskId] : []))
   const claimed = new Set(chats.sessions.flatMap(item => (branchMessages(item) as NativeMessage[]).flatMap(message => message.taskId ? [message.taskId] : [])))
@@ -221,10 +268,10 @@ export function conversationGenerating(chat: NativeChat) {
     conversationMediaTasks(chat).some(task => ['submitting', 'running'].includes(task.phase)))
 }
 export function conversationBusy(chat: NativeChat) {
-  return Boolean(chats.preparing[chat.id])
+  return Boolean(chats.preparing[chat.id] || chats.assetsLoading[chat.id])
 }
 function restoreMessage(message: NativeMessage): NativeMessage {
-  return { ...message, ...(message.documentTask ? { documentTask: { ...message.documentTask, preparing: false } } : {}), quote: readMessageQuote(message.quote), interactions: readMessageInteractions(message.interactions), streaming: false, contextCompressing: false, interrupted: message.streaming || message.contextCompressing ? true : message.interrupted }
+  return { ...message, ...(message.documentTask ? { documentTask: { ...message.documentTask, preparing: false } } : {}), quote: hasDeferredChatAssets(message.quote) ? message.quote : readMessageQuote(message.quote), interactions: hasDeferredChatAssets(message.interactions) ? message.interactions : readMessageInteractions(message.interactions), streaming: false, contextCompressing: false, interrupted: message.streaming || message.contextCompressing ? true : message.interrupted }
 }
 function modelMessage(message: NativeMessage): NativeMessage {
   if (message.role !== 'user' || !message.quote) return message
@@ -257,12 +304,16 @@ export async function saveChats(required = false) {
     sessions: chats.sessions, activeId: chats.activeId, projects: chats.projects, deletedMediaConversationIds: chats.deletedMediaConversationIds,
     mediaConversationsMigrated: chats.mediaConversationsMigrated, _hasHydrated: true,
   }, version: 1 }
-  try { await writes({ key: store(), snapshot }, required) }
-  catch (error) { if (version === epoch && owner() === accepted) chats.error = '对话未能保存到浏览器，请保留当前内容。'; if (required) throw error }
+  try { await writes({ key: store(), snapshot, assetSource: assetStore, retainedChats: [...deletingChats, ...(deletedChats?.deleted.map(item => item.chat) || [])] }, required) }
+  catch (error) {
+    if (version === epoch && owner() === accepted) { chats.error = '对话未能保存到浏览器，请保留当前内容。'; notifyBrowserStorageFailure(error) }
+    if (required) throw error
+  }
 }
 export function flushChats() { return writes.flush().catch(() => {}) }
 export async function togglePinnedMessage(chat: NativeChat, messageId: string) {
   if (!owner() || !chats.ready || !chats.sessions.includes(chat) || conversationBusy(chat)) throw new Error('当前对话不可用，请稍后重试。')
+  if (!chatAssetsReady(chat)) await ensureChatAssets(chat)
   const before = chat.pinnedMessageIds, version = epoch
   const ids = readPinnedMessageIds(before).filter(id => branchMessages(chat).some(message => message.id === id))
   const pinned = !ids.includes(messageId)
@@ -289,9 +340,11 @@ export function loadChats() {
     try {
       await retiredWrites
       if (version !== epoch) return
-      const native = await readChatSnapshot(key)
-      const stored = native || (/^[1-9]\d*$/.test(accepted) ? await readChatSnapshot(`octopus:user-${accepted}:chat-next-web-store`) : null)
+      const native = await readChatSnapshot(key, { deferAllSessionAssets: true })
+      const legacyKey = `octopus:user-${accepted}:chat-next-web-store`
+      const stored = native || (/^[1-9]\d*$/.test(accepted) ? await readChatSnapshot(legacyKey, { deferAllSessionAssets: true }) : null)
       if (version !== epoch) return
+      assetStore = !native && stored ? legacyKey : key
       const values = Array.isArray(stored?.state.sessions) ? stored!.state.sessions : []
       chats.projects = normalizeChatProjects(stored?.state.projects)
       chats.deletedMediaConversationIds = Array.isArray(stored?.state.deletedMediaConversationIds)
@@ -301,7 +354,7 @@ export function loadChats() {
         const config = chatOptionsSchema.safeParse({ ...value.mask?.modelConfig, ...value.settings, messages: [{ role: 'user', content: 'initial' }] })
         const { messages: _, ...settings } = config.success ? config.data : { messages: [], ...defaults() }
         const next: NativeChat = { ...value, creationKind: value.creationKind === 'image' || value.creationKind === 'video' ? value.creationKind : 'text', topic: String(value.topic || '历史对话'), settings, system: value.system || '', skillIds: value.skillIds || [], search: value.search || 'off', compressionThreshold: value.compressionThreshold || 272000, sendMemory: value.sendMemory !== false, toolContext: value.toolContext || '', memoryPrompt: value.memoryPrompt || '', lastSummarizeIndex: value.lastSummarizeIndex || 0, lastUpdate: value.lastUpdate || Date.now(),
-          pinnedMessageIds: readPinnedMessageIds(value.pinnedMessageIds), draftQuote: readMessageQuote(value.draftQuote), messages: value.messages.map(restoreMessage),
+          pinnedMessageIds: readPinnedMessageIds(value.pinnedMessageIds), draftQuote: hasDeferredChatAssets(value.draftQuote) ? value.draftQuote : readMessageQuote(value.draftQuote), messages: value.messages.map(restoreMessage),
           messageBranches: Array.isArray(value.messageBranches) ? value.messageBranches.map(restoreMessage) : [] }
         initializeBranches(next)
         if (!next.mediaDrafts && next.creationKind !== 'text') {
@@ -363,6 +416,7 @@ export async function removeChats(ids: string[]) {
   chats.deletedMediaConversationIds = [...new Set([...previousTombstones, ...tombstones])]
   chats.sessions = remaining; chats.activeId = nextId
   const next = chats.sessions
+  for (const { chat } of removed) deletingChats.add(chat)
   try {
     await saveChats(true)
     if (version !== epoch) return
@@ -375,6 +429,7 @@ export async function removeChats(ids: string[]) {
     if (version === epoch && chats.sessions === next && chats.activeId === nextId) { chats.sessions = previous; chats.activeId = activeId; chats.deletedMediaConversationIds = previousTombstones }
     throw error
   }
+  finally { for (const { chat } of removed) deletingChats.delete(chat) }
 }
 export async function undoRemovedChats() {
   const snapshot = deletedChats
@@ -403,7 +458,7 @@ export async function undoRemovedChats() {
   }
 }
 export function cloneChat(chat: NativeChat) {
-  const snapshot = JSON.parse(JSON.stringify(chat))
+  const snapshot = cloneChatValue(chat)
   const copy = { ...snapshot, ...cloneBranchMessages(snapshot, () => crypto.randomUUID()), id: crypto.randomUUID(), topic: `${chat.topic} 副本` } as NativeChat
   if (copy.mediaConversationId) copy.mediaConversationId = copy.id
   const ids = new Map<string, string>()
@@ -475,9 +530,14 @@ watch(() => [chats.sessions.map(chat => [chat.id, (branchMessages(chat) as Nativ
 }, { deep: true })
 export async function sendChat(chat: NativeChat, text: string, files: ParsedFile[], model: string, regenerate?: NativeMessage, edited?: NativeMessage, options?: { quote?: MessageQuote; optionResponse?: MessageOptionResponse; document?: { format: 'docx' | 'xlsx'; source?: DocumentSource; reference?: DocumentSource } }): Promise<boolean> {
   if (conversationBusy(chat) || !owner() || !registeredChat(chat)) return false
+  if (!chatAssetsReady(chat)) await ensureChatAssets(chat)
   if (regenerate) {
     regenerate = chat.messages.find(message => message.id === regenerate!.id && message.role === 'user')
     if (!regenerate) return false
+  }
+  if (edited) {
+    edited = chat.messages.find(message => message.id === edited!.id && message.role === 'user')
+    if (!edited) return false
   }
   const originalContent = regenerate?.content
   const hasOriginalInput = typeof originalContent === 'string' ? !!originalContent.trim() :
@@ -727,6 +787,7 @@ export async function submitMessageOptions(chat: NativeChat, sourceMessage: Nati
   return sendChat(chat, text, [], model, undefined, undefined, { optionResponse: { sourceMessageId: source.id, optionsId: definition.id, selectedIds: selected } })
 }
 export async function editAssistantMessage(chat: NativeChat, message: NativeMessage, text: string): Promise<void> {
+  if (!chatAssetsReady(chat)) await ensureChatAssets(chat)
   const target = chat.messages.find(item => item.id === message.id)
   if (!owner() || !registeredChat(chat) || chats.activeId !== chat.id || !target || target.role !== 'assistant') throw new Error('当前消息暂时不能编辑。')
   if (!text.trim()) throw new Error('消息内容不能为空。')
@@ -738,6 +799,7 @@ export async function editAssistantMessage(chat: NativeChat, message: NativeMess
   try { await saveChats(true) } catch (error) { if (version === epoch && target.content === nextContent) Object.assign(target, previous); throw error }
 }
 export async function rerunMessageTool(chat: NativeChat, message: NativeMessage, tool: StudioToolActivity, args: Record<string, unknown>): Promise<void> {
+  if (!chatAssetsReady(chat)) await ensureChatAssets(chat)
   const source = chat.messages.find(item => item.id === message.id)
   const target = source?.tools?.find(item => item.id === tool.id)
   const call = source?.toolRounds?.flatMap(item => item.tool_calls || []).find(item => item.id === tool.id && item.function.name === tool.name)
@@ -783,11 +845,13 @@ export async function rerunMessageTool(chat: NativeChat, message: NativeMessage,
 watch(owner, () => {
   retiredWrites = Promise.all([retiredWrites, flushChats()]).then(() => {})
   writes = createChatWrites()
-  dirtyDrafts.clear()
+  dirtyDrafts.clear(); deletingChats.clear()
+  for (const read of assetReads.values()) read.controller.abort()
+  assetReads.clear(); assetStore = ''; displayedChatId = undefined; forgetChatAssets()
   epoch++; runs.clear()
   for (const controller of toolControllers.values()) controller.abort()
   toolControllers.clear()
   clearDeletedChats()
-  chats.ready = false; chats.sessions = []; chats.activeId = ''; chats.error = ''; chats.skills = []; chats.busy = {}; chats.preparing = {}; chats.initialSaving = {}
+  chats.ready = false; chats.sessions = []; chats.activeId = ''; chats.error = ''; chats.skills = []; chats.busy = {}; chats.preparing = {}; chats.initialSaving = {}; chats.assetsLoading = {}
   chats.projects = []; chats.deletedMediaConversationIds = []; chats.mediaConversationsMigrated = false; loading = undefined
 }, { flush: 'sync' })

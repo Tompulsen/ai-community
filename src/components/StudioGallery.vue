@@ -18,6 +18,7 @@ const view = ref('gallery'), filter = ref('all'), query = ref(''), modelFilter =
 const batchMode = ref(false), selected = ref<string[]>([]), error = ref(''), busy = ref(false), loading = ref(false)
 const rows = ref<CreationTask[]>([]), total = ref<number>(), modelOptions = ref<string[]>([]), storageBytes = ref<number>()
 const after = ref<{ createdAt: number; id: string }>(), pageSize = 60
+const pageCursors = ref<TaskPageQuery['after'][]>([undefined]), taskPage = ref(0), outputOffset = ref(0), displayPage = ref(0), scroll = ref<HTMLElement>()
 const exportProgress = ref<{ current: number; total: number }>()
 const exportError = ref('')
 const settingsId = `gallery-settings-${useId()}`, settingsButton = ref<HTMLButtonElement>(), settingsOpen = ref(false)
@@ -34,10 +35,12 @@ let currentFilters: TaskPageQuery | undefined
 const phases: Record<string, string> = { complete: '已完成', error: '失败', attention: '请求异常', submitting: '提交中', running: '进行中', paused: '已暂停' }
 const visible = computed(() => rows.value.map(task => creation.tasks.find(current => current.id === task.id && current.owner === session.user?.id) || task))
 type GalleryItem = { key: string; task: CreationTask; index: number }
-const items = computed<GalleryItem[]>(() => visible.value.flatMap(task => view.value === 'gallery'
+const pageItems = computed<GalleryItem[]>(() => visible.value.flatMap(task => view.value === 'gallery'
   ? galleryOutputIndexes(task).map(index => ({ key: `${task.id}:${index}`, task, index }))
   : [{ key: `${task.id}:task`, task, index: 0 }]))
 const allSelected = computed(() => selected.value.length > 0 && selected.value.length === total.value)
+const items = computed(() => pageItems.value.slice(outputOffset.value, outputOffset.value + pageSize))
+const hasNextPage = computed(() => outputOffset.value + pageSize < pageItems.value.length || !!after.value)
 const hasFilters = computed(() => !!(query.value.trim() || modelFilter.value || timeFilter.value || filter.value !== 'all'))
 const storageLabel = computed(() => {
   const bytes = storageBytes.value
@@ -63,6 +66,7 @@ function cancelOperation() {
 watch(() => session.user?.id, () => {
   revision++; previewRevision++; cancelOperation(); previewer.value?.close(); preview.value = undefined
   currentFilters = undefined
+  pageCursors.value = [undefined]; taskPage.value = 0; outputOffset.value = 0; displayPage.value = 0
   batchMode.value = false; selected.value = []; rows.value = []; total.value = undefined; modelOptions.value = []; after.value = undefined; error.value = ''; storageBytes.value = undefined; loading.value = false
 })
 function loadSummary(owner: string, options: TaskPageQuery, accepted: number) {
@@ -74,25 +78,42 @@ function loadSummary(owner: string, options: TaskPageQuery, accepted: number) {
   void getTaskStorageSize(owner).then(bytes => { if (current()) storageBytes.value = bytes })
     .catch(cause => { if (current()) error.value = errorMessage(cause) })
 }
-async function loadPage(append = false, prepare = false) {
+async function loadPage(paging = false, prepare = false, targetPage = 0) {
   const owner = session.user?.id
-  if (!owner || props.previewOnly || append && (loading.value || !after.value)) return
-  const accepted = append ? revision : ++revision, cursor = append ? after.value : undefined
-  const options = append && currentFilters ? currentFilters : filters()
-  if (!append) currentFilters = options
+  if (!owner || props.previewOnly || paging && loading.value) return false
+  const accepted = paging ? revision : ++revision, cursor = paging ? pageCursors.value[targetPage] : undefined
+  const options = paging && currentFilters ? currentFilters : filters()
+  if (!paging) currentFilters = options
   loading.value = true; error.value = ''
-  if (!append) total.value = undefined
+  if (!paging) total.value = undefined
   try {
     if (prepare) { preparing = true; try { await prepareCreationHistory() } finally { preparing = false } }
     if (accepted !== revision || owner !== session.user?.id) return
     const page = await getTaskPage(owner, { ...options, after: cursor, limit: pageSize, summary: false })
     if (accepted !== revision || owner !== session.user?.id) return
-    const current = append ? [...rows.value] : [], known = new Set(current.map(task => task.id))
-    rows.value = [...current, ...page.tasks.filter(task => !known.has(task.id))]
+    rows.value = page.tasks
+    taskPage.value = targetPage; outputOffset.value = 0
+    if (!paging) { pageCursors.value = [undefined]; displayPage.value = 0 }
     after.value = page.after
     loadSummary(owner, options, accepted)
+    return true
   } catch (cause) { if (accepted === revision && owner === session.user?.id) error.value = errorMessage(cause) }
   finally { if (accepted === revision) loading.value = false }
+}
+async function turnPage(direction: -1 | 1) {
+  if (loading.value || busy.value) return
+  if (direction === 1 && outputOffset.value + pageSize < pageItems.value.length) outputOffset.value += pageSize
+  else if (direction === -1 && outputOffset.value > 0) outputOffset.value -= pageSize
+  else {
+    const target = taskPage.value + direction
+    if (target < 0 || direction === 1 && !after.value) return
+    if (direction === 1) pageCursors.value[target] = after.value
+    if (!await loadPage(true, false, target)) return
+    if (direction === -1) outputOffset.value = Math.max(0, Math.ceil(pageItems.value.length / pageSize) - 1) * pageSize
+  }
+  displayPage.value += direction
+  await nextTick()
+  scroll.value?.scrollTo({ top: 0 })
 }
 function scheduleRefresh(prepare = false) {
   clearTimeout(refreshTimer)
@@ -231,11 +252,11 @@ function reuse(task: CreationTask) { emit('reuse', canonicalCreationTask(task)) 
           <div :id="settingsId" popover="auto" role="dialog" aria-label="作品库设置" class="gallery-settings-content" @toggle="toggleSettings"><label><span>自动收录作品</span><input type="checkbox" role="switch" :checked="mediaSettings.autoSaveGallery" :disabled="!mediaSettings.loaded || busy" @change="run(() => updateMediaSettings({ autoSaveGallery: ($event.target as HTMLInputElement).checked }))" /></label><label><span>自动下载作品</span><input type="checkbox" role="switch" :checked="mediaSettings.autoDownload" :disabled="!mediaSettings.loaded || busy" @change="run(() => updateMediaSettings(($event.target as HTMLInputElement).checked))" /></label><div class="gallery-location"><span>下载位置</span><span>浏览器默认</span></div><button class="gallery-action" type="button" :disabled="busy" @click="clearFailed"><Trash2 :size="15" />清理失败记录</button></div>
         </div>
       </div>
-      <div v-if="batchMode && after" class="gallery-page-selection"><label><input type="checkbox" aria-label="选择当前页" :checked="items.length > 0 && items.every(item => selected.includes(item.key))" :disabled="busy" @change="selected = ($event.target as HTMLInputElement).checked ? [...new Set([...selected, ...items.map(item => item.key)])] : selected.filter(key => !items.some(item => item.key === key))" />选择当前页</label></div>
+      <div v-if="batchMode && (displayPage > 0 || hasNextPage)" class="gallery-page-selection"><label><input type="checkbox" aria-label="选择当前页" :checked="items.length > 0 && items.every(item => selected.includes(item.key))" :disabled="busy" @change="selected = ($event.target as HTMLInputElement).checked ? [...new Set([...selected, ...items.map(item => item.key)])] : selected.filter(key => !items.some(item => item.key === key))" />选择当前页</label></div>
       <p v-if="exportError" class="gallery-error" role="alert">{{ exportError }}<button class="gallery-action" type="button" :disabled="busy || !selected.length" @click="exportSelected">重新导出</button></p>
       <p v-else-if="error" class="gallery-error" role="alert">{{ error }}<button class="gallery-action" type="button" :disabled="busy || loading" @click="loadPage(false, true)">重试</button></p>
     </div>
-    <div class="gallery-scroll" :aria-busy="loading">
+    <div ref="scroll" class="gallery-scroll" :aria-busy="loading">
       <p v-if="loading && !items.length" class="gallery-empty" role="status"><LoaderCircle :size="24" />正在读取作品记录…</p>
       <div v-else-if="!items.length" class="gallery-empty" role="status"><Images :size="32" /><p>{{ hasFilters ? '没有找到匹配的作品' : '还没有作品' }}</p><button v-if="hasFilters" type="button" class="gallery-action" @click="clearFilters"><X :size="15" />清除筛选</button><button v-else type="button" class="gallery-action" @click="emit('create')"><ImagePlus :size="15" />开始生图</button></div>
       <div v-else :class="view === 'gallery' ? 'gallery-grid' : 'task-list'">
@@ -248,8 +269,8 @@ function reuse(task: CreationTask) { emit('reuse', canonicalCreationTask(task)) 
           <div v-if="!batchMode" class="item-actions"><button v-if="item.task.phase === 'complete'" class="card-action" type="button" :aria-label="item.task.urls.length > 1 ? '发布本组到社区' : '发布到社区'" :title="item.task.urls.length > 1 ? '发布本组到社区' : '发布到社区'" @click="publish(item.task, 'community')"><Upload :size="16" /></button><button v-if="item.task.phase === 'complete'" class="card-action" type="button" title="下载" aria-label="下载此记录" :disabled="busy" @click="run(() => downloadCreation(canonicalCreationTask(item.task), item.index))"><Download :size="16" /></button><button class="card-action" type="button" title="复用参数" aria-label="复用参数" @click="reuse(item.task)"><CopyPlus :size="16" /></button><button v-if="view === 'gallery'" class="card-action danger" type="button" title="从作品库移除" aria-label="从作品库移除" :disabled="busy" @click="run(current => removeItems([item], current))"><Trash2 :size="16" /></button><button v-if="item.task.kind !== 'video' && item.task.sourceWorkId && item.task.phase === 'complete'" class="card-action" type="button" title="发送到源作品评论区" aria-label="发送到源作品评论区" @click="publish(item.task, 'source-comment')"><Upload :size="16" /></button></div>
         </article>
       </div>
-      <button v-if="after" class="gallery-action gallery-more" type="button" :disabled="loading || busy" @click="loadPage(true)"><LoaderCircle v-if="loading" :size="15" />{{ loading ? '正在读取…' : '加载更多' }}</button>
     </div>
+    <nav v-if="items.length && (displayPage > 0 || hasNextPage)" class="gallery-pagination" aria-label="作品记录分页"><button class="gallery-action" type="button" :disabled="loading || busy || displayPage === 0" @click="turnPage(-1)">上一页</button><span role="status">第 {{ displayPage + 1 }} 页 · 本页 {{ items.length }} 件</span><button class="gallery-action" type="button" :disabled="loading || busy || !hasNextPage" @click="turnPage(1)">{{ loading ? '正在读取…' : '下一页' }}</button></nav>
     <div v-if="exportProgress" class="gallery-export" role="status"><progress :value="exportProgress.current" :max="exportProgress.total" aria-label="作品导出进度" /><span>{{ exportProgress.current }} / {{ exportProgress.total }}</span><button class="gallery-action" type="button" @click="cancelOperation">停止下载</button></div>
   </section>
   <StudioMediaPreview ref="previewer" :items="previewItems" label="原始媒体预览" close-label="关闭媒体预览" :on-download="downloadPreview" :on-copy="copyPreview" @close="preview = undefined; previewRevision++" />
@@ -257,6 +278,7 @@ function reuse(task: CreationTask) { emit('reuse', canonicalCreationTask(task)) 
 
 <style scoped>
 .studio-gallery { display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100%; color: var(--ink); }
+.gallery-pagination { display: flex; flex: none; justify-content: center; align-items: center; gap: 12px; padding: 8px 16px; font-size: 12px; }.gallery-pagination button { min-height: 44px; }
 .gallery-controls { flex: none; padding: 0 24px 16px; }.gallery-view-tabs { display: flex; gap: 4px; margin-bottom: 16px; }
 .gallery-tab { min-height: 32px; padding: 6px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }.gallery-tab:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }.gallery-tab[aria-selected="true"] { color: var(--ink); background: var(--state-selected); }.gallery-tab[aria-selected="true"]:hover:not(:disabled) { background: var(--state-pressed); }
 .gallery-toolbar { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(100px, 120px) minmax(120px, 180px) minmax(110px, 140px); gap: 12px; align-items: center; }

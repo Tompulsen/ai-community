@@ -18,40 +18,51 @@ const identity = computed(() => {
 const previewLabel = computed(() => `预览 ${props.task.prompt}${props.index > 0 ? ` · ${props.index + 1}` : ''}`)
 const durationLabel = computed(() => duration.value === undefined ? '' : `${Math.floor(duration.value / 60)}:${String(Math.floor(duration.value % 60)).padStart(2, '0')}`)
 let dispose = () => {}
+let releaseSource = () => {}
+function failedCover() { releaseSource(); error.value = '封面无法显示，请重新加载。' }
 watch([() => session.user?.id, () => props.task.id, () => props.index, identity, retry, element], () => {
   dispose(); source.value = ''; duration.value = undefined; error.value = ''; loading.value = false
   const owner = session.user?.id, task = props.task, index = props.index, acceptedIdentity = identity.value
   const url = task.urls[index]
   if (!owner || task.owner !== owner || !element.value || !url) return
-  const controller = new AbortController()
-  let objectUrl = '', observer: IntersectionObserver | undefined, started = false
-  const current = () => !controller.signal.aborted && session.user?.id === owner && props.task.id === task.id && identity.value === acceptedIdentity
+  let controller: AbortController | undefined, objectUrl = '', observer: IntersectionObserver | undefined, active = true
+  const stop = () => {
+    controller?.abort(); controller = undefined
+    source.value = ''; duration.value = undefined; loading.value = false
+    if (objectUrl) URL.revokeObjectURL(objectUrl)
+    objectUrl = ''
+  }
+  releaseSource = stop
   const load = async () => {
-    if (started || !current()) return
-    started = true; observer?.disconnect(); loading.value = true
+    if (controller || !active || session.user?.id !== owner) return
+    const request = new AbortController()
+    controller = request
+    const current = () => active && controller === request && !request.signal.aborted && session.user?.id === owner && props.task.id === task.id && identity.value === acceptedIdentity
+    loading.value = true; error.value = ''
     try {
       let cached = retry.value ? undefined : await readTaskPreview(owner, task.id, acceptedIdentity, index)
       if (!current()) return
       if (!cached) {
-        const original = await readTaskAsset(owner, url)
-        if (!current()) return
         if (task.kind === 'video') {
           if (task.poster) {
             try {
-              const response = await fetch(await readableMedia(task.poster, 'image', true), { credentials: 'same-origin', signal: controller.signal })
-              if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) { await response.body?.cancel(); throw new Error('视频封面暂时无法读取。') }
-              cached = { blob: await imageThumbnail(await response.blob(), controller.signal) }
-            } catch (cause) { if (controller.signal.aborted) throw cause }
+              cached = { blob: await imageThumbnail(async () => {
+                const response = await fetch(await readableMedia(task.poster!, 'image', true), { credentials: 'same-origin', signal: request.signal })
+                if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) { await response.body?.cancel(); throw new Error('视频封面暂时无法读取。') }
+                return response.blob()
+              }, request.signal) }
+            } catch (cause) { if (request.signal.aborted) throw cause }
           }
           if (!cached) {
+            const original = await readTaskAsset(owner, url)
+            if (!current()) return
             const temporary = original ? URL.createObjectURL(original) : undefined
-            try { cached = await extractVideoPoster(temporary || await readableMedia(url, 'video'), controller.signal) }
+            try { cached = await extractVideoPoster(temporary || await readableMedia(url, 'video'), request.signal) }
             finally { if (temporary) URL.revokeObjectURL(temporary) }
           }
         } else {
           if (retry.value) forgetCreationImage(url)
-          const blob = original || await readCreationImage(url, controller.signal)
-          cached = { blob: await imageThumbnail(blob, controller.signal) }
+          cached = { blob: await imageThumbnail(() => readCreationImage(url, request.signal), request.signal) }
         }
         if (!current()) return
         // A failed optional cover write never blocks opening or publishing the original.
@@ -64,10 +75,10 @@ watch([() => session.user?.id, () => props.task.id, () => props.index, identity,
   }
   if (typeof IntersectionObserver === 'undefined') void load()
   else {
-    observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) void load() }, { rootMargin: '160px 0px' })
+    observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) void load(); else stop() }, { rootMargin: '160px 0px' })
     observer.observe(element.value)
   }
-  dispose = () => { controller.abort(); observer?.disconnect(); if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  dispose = () => { active = false; stop(); observer?.disconnect() }
 }, { flush: 'post', immediate: true })
 onBeforeUnmount(() => dispose())
 </script>
@@ -75,7 +86,7 @@ onBeforeUnmount(() => dispose())
 <template>
   <div ref="element" class="gallery-cover">
     <button v-if="source" class="cover-preview" type="button" :aria-label="selecting ? `选择 ${task.prompt}${task.urls.length > 1 ? ` · ${index + 1}` : ''}` : previewLabel" :aria-pressed="selecting ? selected : undefined" @click="emit('open')">
-      <img :src="source" :alt="task.prompt" decoding="async" @error="error = '封面无法显示，请重新加载。'; source = ''" />
+      <img :src="source" :alt="task.prompt" decoding="async" @error="failedCover" />
       <Play v-if="task.kind === 'video'" :size="24" class="cover-play" aria-hidden="true" /><Maximize v-else :size="16" class="cover-expand" aria-hidden="true" />
       <span v-if="durationLabel" class="cover-duration" aria-label="实际视频时长">{{ durationLabel }}</span>
     </button>

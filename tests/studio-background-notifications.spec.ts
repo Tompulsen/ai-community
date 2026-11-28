@@ -165,6 +165,7 @@ async function startImage(page: Page, prompt: string) {
 }
 
 async function leaveWorkbench(page: Page) {
+  await expect(page.locator('.studio-sidebar')).toBeAttached()
   const link = page.locator('.studio-sidebar').getByRole('link', { name: '探索社区', exact: true })
   if (!await link.isVisible()) await page.getByRole('button', { name: '打开侧边栏', exact: true }).click()
   await link.click()
@@ -371,6 +372,35 @@ test('a stopped task viewed in the workbench stays in history without a persiste
     await expect(page.locator('.task-status')).toContainText('已停止等待')
     await leaveWorkbench(page)
     await expect(dock(page)).toHaveCount(0)
+  } finally { state.finish() }
+})
+
+test('background result previews release their object URLs on minimize and dismissal', async ({ page }) => {
+  await page.addInitScript(() => {
+    const revoked: string[] = [], revoke = URL.revokeObjectURL
+    ;(window as any).__dockRevokedURLs = revoked
+    URL.revokeObjectURL = url => { revoked.push(url); revoke.call(URL, url) }
+  })
+  const state = await fixture(page), prompt = '小窗图片应释放内存'
+  try {
+    await startImage(page, prompt)
+    await leaveWorkbench(page)
+    state.finish()
+    await completeImage(page, prompt)
+    const preview = dock(page).locator('.dock-preview img')
+    await expect(preview).toHaveAttribute('src', /^blob:/)
+    const first = await preview.getAttribute('src')
+    await dock(page).getByRole('button', { name: '收起生成任务', exact: true }).click()
+    await expect(preview).toHaveCount(0)
+    await expect.poll(() => page.evaluate(url => (window as any).__dockRevokedURLs.includes(url), first)).toBe(true)
+    await dock(page).getByRole('button', { name: '展开生成任务', exact: true }).click()
+    await expect(preview).toHaveAttribute('src', /^blob:/)
+    const second = await preview.getAttribute('src')
+    expect(second).not.toBe(first)
+    await dock(page).getByRole('button', { name: '关闭此提醒', exact: true }).click()
+    await expect(dock(page)).toHaveCount(0)
+    await expect.poll(() => page.evaluate(url => (window as any).__dockRevokedURLs.includes(url), second)).toBe(true)
+    expect(state.submissions()).toBe(1)
   } finally { state.finish() }
 })
 
@@ -599,6 +629,8 @@ for (const outcome of ['succeeded', 'failed'] as const) test(`the browser reads 
 })
 
 for (const width of [390, 1440]) for (const outcome of ['succeeded', 'failed'] as const) test(`a missing video reminder closes and recovers the upstream ${outcome} result at ${width}px`, async ({ page }, info) => {
+  let studioModule = ''
+  page.on('request', request => { if (/\/src\/native-studio\.ts(?:\?|$)/.test(request.url())) studioModule = request.url() })
   await page.setViewportSize({ width, height: 900 })
   const state = await fixture(page, '/work/backgroundsource', 'video')
   let queries = 0, finished = false
@@ -632,8 +664,24 @@ for (const width of [390, 1440]) for (const outcome of ['succeeded', 'failed'] a
   expect(queries).toBe(1)
   expect(state.requests).toHaveLength(1)
   finished = true
+  // Delayed async-component mounting must not lose a recovery that already completed.
+  const delayedDock = outcome === 'succeeded' && width === 1440
+  if (delayedDock) await page.route('**/src/components/BackgroundStudio.vue*', async route => {
+    if (new URL(route.request().url()).searchParams.has('vue')) return route.continue()
+    const response = await route.fetch()
+    await route.fulfill({ response, body: await response.text() + '\nawait new Promise(resolve => { window.__releaseBackgroundMount = resolve })' })
+  })
   await page.reload()
   await expect(page.locator('.app-header')).toBeVisible()
+  if (delayedDock) {
+    await expect.poll(() => queries).toBe(2)
+    await expect.poll(() => page.evaluate(() => typeof (window as any).__releaseBackgroundMount)).toBe('function')
+    await expect.poll(() => page.evaluate(async ({ path, id }) => {
+      const { creation } = await import(/* @vite-ignore */ path)
+      return creation.tasks.some(task => task.id === id && task.phase === 'complete') && !creation.restoringTaskIds.has(id)
+    }, { path: studioModule, id: state.requests[0].requestId })).toBe(true)
+    await page.evaluate(() => (window as any).__releaseBackgroundMount())
+  }
   if (outcome === 'succeeded') {
     await expect(dock(page)).toContainText('生成完成')
     await dock(page).getByRole('button', { name: '查看结果', exact: true }).click()

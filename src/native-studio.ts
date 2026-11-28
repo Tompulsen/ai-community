@@ -17,6 +17,7 @@ import { readRemixParameters } from '../shared/studio/remix-parameters'
 import { normalizeImageRequest, usesGeminiImageChat } from '../shared/studio/image-params'
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
 import { captureTaskSnapshot, deleteTaskRecords, imageBlob, readTaskAsset, readTaskForUpdate, readTaskPreview, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal, saveTaskPreview, taskAssetUrl } from './studio-task-store'
+import { notifyBrowserStorageChanged, notifyBrowserStorageFailure } from './browser-storage'
 import { imageThumbnail } from './studio-media-previews'
 import { imageDownload, originalImageUrl } from './image-download'
 import { chooseImageDownloadFormat } from './image-download-choice'
@@ -116,6 +117,7 @@ export const creation = reactive({
   groupsLoading: false, groupSwitching: false, groupsError: '', modelLaunchPending: undefined as Promise<void> | undefined,
   tasks: [] as CreationTask[], selectedId: '', loaded: false, storageError: '', historyRevision: 0,
   restoringTaskIds: new Set<string>(),
+  recoveredTaskIds: new Set<string>(),
 })
 export const mediaSettings = reactive({ autoDownload: false, autoSaveGallery: true, loaded: false })
 const controllers = new Map<string, AbortController>()
@@ -178,8 +180,10 @@ async function persist(required = false, refreshHistory = true) {
       if (acceptedOwner === activeOwner()) {
         localStorage.removeItem(key + ':v2-fallback')
         if (refreshHistory) creation.historyRevision++
+        notifyBrowserStorageChanged()
       }
-    } catch {
+    } catch (cause) {
+      if (acceptedOwner === activeOwner()) notifyBrowserStorageFailure(cause)
       try { localStorage.setItem(key + ':v2-fallback', `[${[...snapshot.values()].join(',')}]`) }
       catch {
         if (acceptedOwner === activeOwner()) creation.storageError = '本地存储空间不足，刷新前请下载生成结果。'
@@ -727,6 +731,7 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
     if (epoch !== version || controller.signal.aborted) return
     const finished = applyResult(task, data)
     // A history lookup becomes a live reminder only after confirmed progress or a recovered result.
+    if (task.phase === 'complete' && creation.restoringTaskIds.has(task.id)) creation.recoveredTaskIds.add(task.id)
     if (!finished || task.phase === 'complete') creation.restoringTaskIds.delete(task.id)
     deadline = task.deadline ?? deadline
     await persist()
@@ -1326,8 +1331,11 @@ export function cacheCreationImages(value: CreationTask, retry = false): Promise
       if (failure) throw failure
       check(); task.browserSave = { state: 'saved' }
     } catch (cause) {
-      if (current()) task.browserSave = { state: 'failed', error: cause instanceof DOMException && cause.name === 'QuotaExceededError'
-        ? '浏览器空间不足，请释放空间后重试，或下载原图保存。' : errorMessage(cause) }
+      if (current()) {
+        if (cause instanceof DOMException && cause.name === 'QuotaExceededError') notifyBrowserStorageFailure(cause)
+        task.browserSave = { state: 'failed', error: cause instanceof DOMException && cause.name === 'QuotaExceededError'
+          ? '浏览器空间不足，请释放空间后重试，或下载原图保存。' : errorMessage(cause) }
+      }
     } finally {
       if (acquired) {
         const next = waitingImageSaves.shift()
@@ -1488,7 +1496,10 @@ export async function downloadCreationSelection(items: { task: CreationTask; ind
     onProgress?.(1)
     return
   }
-  const { downloadZip } = await import('client-zip')
+  const { downloadZip, predictLength } = await import('client-zip')
+  const maximumBytes = 128 * 1024 * 1024
+  const oversizedMessage = '本次导出文件较大，请减少选择后分批导出。作品已保留。单次打包上限为 128 MiB。'
+  let projectedBytes = 0n, streamedBytes = 0
   let fileError: Error | undefined
   async function* files() {
     for (const [position, item] of items.entries()) {
@@ -1498,7 +1509,11 @@ export async function downloadCreationSelection(items: { task: CreationTask; ind
         const input = await creationDownloadBlob(task, item.index, version, signal, format ?? 'original')
         const ordinal = String(position + 1).padStart(String(items.length).length, '0')
         const filename = creationFilename(input, task, item.index).replace(/[^A-Za-z0-9._-]/g, '_')
-        yield { name: `${ordinal}-${filename}`, input }
+        const name = `${ordinal}-${filename}`
+        // Individual archive lengths conservatively include every file's ZIP overhead.
+        projectedBytes += predictLength([{ name, size: input.size }])
+        if (projectedBytes > BigInt(maximumBytes)) throw new Error(oversizedMessage)
+        yield { name, input }
         onProgress?.(position + 1)
       } catch (cause) {
         signal.throwIfAborted()
@@ -1507,8 +1522,21 @@ export async function downloadCreationSelection(items: { task: CreationTask; ind
       }
     }
   }
+  const zip = downloadZip(files())
+  const stream = zip.body!.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      checkCreationDownload(first.task, version, signal)
+      streamedBytes += chunk.byteLength
+      if (streamedBytes > maximumBytes) {
+        fileError = new Error(oversizedMessage)
+        throw fileError
+      }
+      controller.enqueue(chunk)
+    },
+  }), { signal })
   // Browsers may replace the source stream's error with a generic "Failed to fetch".
-  const archive = await downloadZip(files()).blob().catch(cause => { signal.throwIfAborted(); throw fileError ?? cause })
+  const archive = await new Response(stream, { headers: zip.headers }).blob()
+    .catch(cause => { signal.throwIfAborted(); throw fileError ?? cause })
   checkCreationDownload(first.task, version, signal)
   requestDownload(archive, `作品库-${items.length}项.zip`)
 }
@@ -1704,6 +1732,7 @@ watch(() => accountIdentity(), () => {
   mediaLoads.clear()
   creation.tasks = []; creation.selectedId = ''; creation.loaded = false
   creation.restoringTaskIds.clear()
+  creation.recoveredTaskIds.clear()
   creation.historyRevision++
   mediaSettings.loaded = false; mediaSettings.autoDownload = false; mediaSettings.autoSaveGallery = true
   if (next) {

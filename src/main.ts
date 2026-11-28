@@ -1,11 +1,6 @@
-import { createApp } from 'vue'
-import './style.css'
-import './controls.css'
-import './studio-controls.css'
-import App from './App.vue'
-import { router } from './router'
-import { continuousCorners } from './continuous-corners'
-import { walletPrefetch } from './wallet-prefetch'
-
-const app = createApp(App).directive('continuous', continuousCorners).directive('wallet-prefetch', walletPrefetch).use(router)
-void router.isReady().then(() => app.mount('#app'))
+// Recovery must be reachable before importing chat, media restoration or the app router.
+if (window.location.pathname.replace(/\/+$/, '') === '/storage-recovery') {
+  void import('./recovery-bootstrap')
+} else {
+  void import('./app-bootstrap')
+}

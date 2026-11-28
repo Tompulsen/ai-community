@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComputedRef } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ChevronRight, Eye, EyeOff, LogOut, Palette, Search, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, X } from '@lucide/vue'
+import { ArrowLeft, ChevronRight, Eye, EyeOff, LogOut, Palette, Search, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, HardDrive, X } from '@lucide/vue'
 import { site } from '../site'
 import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, rememberLotteryInvite, rememberReferralInvite, session, type AccountStatus, type LoginIdentitySelection } from '../state'
 import AccountSecurity from '../components/AccountSecurity.vue'
 import AccountPrivacy from '../components/AccountPrivacy.vue'
 import AccountTheme from '../components/AccountTheme.vue'
+import BrowserStoragePanel from '../components/BrowserStoragePanel.vue'
 import AccountWallet from '../components/AccountWallet.vue'
 import CommunityWalletSummary from '../components/CommunityWalletSummary.vue'
 import { parseCommunityWallet, type CommunityWallet } from '../../shared/studio/community-wallet'
@@ -20,7 +21,7 @@ import '../settings-tokens.css'
 interface Account { linked: boolean; issuer?: string; subject?: string; balance: number | null; currency?: string; currencySymbol?: string; accountUrl?: string; studioReady?: boolean; walletEnabled?: boolean; points?: CommunityWallet | null }
 const route = useRoute()
 const router = useRouter()
-const settingTabs = ['privacy', 'theme', 'security', 'balance']
+const settingTabs = ['privacy', 'theme', 'security', 'balance', 'storage']
 const readTab = (value: unknown) => typeof value === 'string' && settingTabs.includes(value) ? value : 'privacy'
 const tab = ref(readTab(route.query.tab))
 const mobileSettings = inject<ComputedRef<boolean>>('mobile-community', computed(() => false))
@@ -35,6 +36,7 @@ const settingsItems = [
   { id: 'security', label: '账号安全', icon: ShieldCheck, group: '账号设置', keywords: '密码 邮箱 验证 登录 设备 会话 security' },
   { id: 'balance', label: '我的账户', icon: Wallet, group: '账号设置', keywords: '账户中心 余额 充值 钱包 balance' },
   { id: 'theme', label: '主题与外观', icon: Palette, group: '偏好设置', keywords: '明亮 暗色 主题 配色 外观 定时 跟随系统 theme' },
+  { id: 'storage', label: '浏览器存储', icon: HardDrive, group: '偏好设置', keywords: '缓存 空间 原图 缩略图 恢复 清理 storage' },
 ]
 const settingsGroups = computed(() => {
   const query = settingsQuery.value.trim().toLocaleLowerCase()
@@ -363,6 +365,7 @@ async function restartLogin() {
         <AccountPrivacy v-if="tab === 'privacy'" ref="privacyPanel" @dirty="privacyDirty = $event" />
         <AccountTheme v-else-if="tab === 'theme'" />
         <AccountSecurity v-else-if="tab === 'security'" />
+        <BrowserStoragePanel v-else-if="tab === 'storage'" :owner="session.user.id" />
         <div v-else class="balance-settings">
           <section class="panel-section balance-panel">
             <div class="balance-summary"><div class="section-heading"><Wallet :size="16" aria-hidden="true" /><h2>{{ account?.walletEnabled ? '社区积分' : '账户余额' }}</h2></div><CommunityWalletSummary v-if="account?.points" :wallet="account.points" @refresh="refreshWallet" /><p v-else-if="account?.walletEnabled" class="form-note" role="status">积分余额暂不可用，请稍后刷新或前往账户中心查看。<button type="button" class="text-link" :disabled="walletReading" @click="refreshWallet">{{ walletReading ? '正在读取…' : '重新读取' }}</button></p><template v-else><p class="account-balance">{{ account?.balance != null ? account.balance.toFixed(2) + ' ' + (account.currency || 'USD') : '--' }}</p><p v-if="account?.balance == null" class="form-note">请在章鱼账户中心查看实时余额。</p><p v-else class="form-note">以章鱼账户中心实时余额为准。</p></template></div>

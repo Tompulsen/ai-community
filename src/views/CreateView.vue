@@ -3,7 +3,7 @@ import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, p
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Copy, Eraser, Images, ListChecks, Menu, MoreVertical, Receipt, KeyRound, CircleDollarSign, Settings, SquarePen, Trash2, Undo2 } from '@lucide/vue'
 import { api, errorMessage, notify, session, sessionStatus } from '../state'
-import { chats, chatDeletion, loadChats, newChat, saveChats, undoRemovedChats, type Skill } from '../native-chat'
+import { chats, chatDeletion, chatAssetsReady, ensureChatAssets, releaseInactiveChatAssets, loadChats, newChat, saveChats, undoRemovedChats, type Skill } from '../native-chat'
 import { armStudioEntryStart, claimStudioEntryStart, readStudioEntry } from '../studio-entry'
 import { modelChoices, modelsForKind } from '../model-preferences'
 import { activateConversation, conversationKind, syncMediaConversations } from '../studio-conversations'
@@ -43,7 +43,7 @@ const menuInSidebar = ref(sidebarMedia.matches)
 function moveMenu() { accountMenu.value?.close(); menuInSidebar.value = sidebarMedia.matches }
 onMounted(() => sidebarMedia.addEventListener('change', moveMenu))
 let entryLive = true
-onBeforeUnmount(() => { entryLive = false; revision++; sidebarMedia.removeEventListener('change', moveMenu) })
+onBeforeUnmount(() => { entryLive = false; revision++; releaseInactiveChatAssets(''); sidebarMedia.removeEventListener('change', moveMenu) })
 const sidebar = ref<InstanceType<typeof StudioSidebar>>(), mobileGallery = ref<InstanceType<typeof StudioLibraryDialog>>()
 const pendingNew = ref(false)
 type MediaAction = 'editTask' | 'editImage' | 'regenerate' | 'useTask' | 'chooseReference'
@@ -52,6 +52,23 @@ const remixReady = computed(() => !sourceLoading.value && !creation.groupsLoadin
 const publisher = ref<InstanceType<typeof StudioPublishDialog>>()
 const kind = computed<StudioKind>(() => route.params.kind === 'video' || route.params.kind === 'text' ? route.params.kind : 'image')
 const currentConversation = computed(() => chats.sessions.find(item => item.id === chats.activeId))
+const conversationLoaded = ref(''), conversationLoading = ref(false), conversationIssue = ref(''), conversationRetry = ref(0)
+const conversationReady = computed(() => !!currentConversation.value && conversationLoaded.value === currentConversation.value.id && chatAssetsReady(currentConversation.value))
+watch([currentConversation, () => session.user?.id, () => chats.ready, () => route.query.conversation, conversationRetry], async ([selected, owner], _previous, onCleanup) => {
+  let cancelled = false
+  onCleanup(() => { cancelled = true })
+  const current = () => !cancelled && entryLive && owner === session.user?.id && selected === currentConversation.value
+  conversationLoaded.value = ''; conversationIssue.value = ''; conversationLoading.value = false
+  releaseInactiveChatAssets()
+  if (!owner || !selected || !chats.ready) return
+  if (typeof route.query.conversation === 'string' && route.query.conversation !== selected.id && chats.sessions.some(item => item.id === route.query.conversation)) return
+  conversationLoading.value = true
+  try {
+    await ensureChatAssets(selected)
+    if (current()) conversationLoaded.value = selected.id
+  } catch (cause) { if (current()) conversationIssue.value = errorMessage(cause) }
+  finally { if (current()) conversationLoading.value = false }
+}, { immediate: true, flush: 'sync' })
 const canvasScope = computed(() => `${session.user?.id}:${chats.activeId}:${kind.value}`)
 provide(studioCanvasKey, {
   scope: canvasScope,
@@ -301,7 +318,13 @@ async function undoConversation() {
   catch (cause) { if (owner === session.user?.id) error.value = errorMessage(cause) }
 }
 watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => chats.ready, pendingNew], async () => {
-  if (!creation.loaded || !chats.ready || (kind.value === 'text' ? !chat.value : !workspace.value)) return
+  if (!creation.loaded || !chats.ready) return
+  if (pendingNew.value && !conversationReady.value) {
+    pendingNew.value = false
+    openConversation(newChat(kind.value).id)
+    return
+  }
+  if (kind.value === 'text' ? !chat.value : !workspace.value) return
   if (pendingNew.value) {
     pendingNew.value = false
     if (kind.value === 'text') chat.value!.createChat()
@@ -421,8 +444,10 @@ watch([() => route.query.start, () => route.query.conversation, workspace, chat,
       <p v-if="sourceLoading" role="status">正在恢复原作配置…</p><button v-if="preparingRemix && !source" type="button" class="text-link" :disabled="importingRemix" @click="cancelRemix">返回作品</button>
       <p v-if="sourceIssue && (!preparingRemix || !source)" class="form-error" role="alert">{{ sourceIssue }} <button v-if="sourceCanFallback" type="button" class="text-link" @click="sourceFallback">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
       <p v-if="initialSaveIssue && !accountTool" class="form-error" role="alert">{{ initialSaveIssue }} <button type="button" class="text-link" :disabled="retryingSave" @click="retryInitialSave">重试保存</button></p>
-      <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="!preparingRemix && source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix || Boolean(route.query.skill)" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @remix-error="sourceIssue = $event" @conversation="openConversation" @media-action="mediaAction" />
-      <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix || Boolean(route.query.skill)" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @remix-error="sourceIssue = $event" @model="sourceIssue && sourceCanFallback && sourceFallback()" />
+      <p v-if="conversationLoading && !accountTool" role="status">正在读取当前对话的附件…</p>
+      <p v-if="conversationIssue && !accountTool" class="form-error" role="alert">{{ conversationIssue }} <button type="button" class="text-link" @click="conversationRetry++">重新读取对话</button><a class="text-link" href="/storage-recovery">管理本地存储</a></p>
+      <StudioChat v-if="!session.user || conversationReady" v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="!preparingRemix && source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix || Boolean(route.query.skill)" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @remix-error="sourceIssue = $event" @conversation="openConversation" @media-action="mediaAction" />
+      <StudioWorkspace v-if="kind !== 'text' && (!session.user || conversationReady)" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix || Boolean(route.query.skill)" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @remix-error="sourceIssue = $event" @model="sourceIssue && sourceCanFallback && sourceFallback()" />
       <StudioRemixDialog v-if="source && preparingRemix" :key="source.id + session.user?.id" :source="source" :issue="sourceIssue" :loading="sourceLoading" :can-fallback="sourceCanFallback" :ready="remixReady" :busy="importingRemix" @apply="importRemix" @background="(files, prompt) => importRemix(files, prompt, true)" @cancel="cancelRemix" @retry="sourceRetry++" @fallback="sourceFallback" />
     </template><StudioPublishDialog ref="publisher" />
   </div>

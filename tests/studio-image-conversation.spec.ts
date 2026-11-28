@@ -307,6 +307,7 @@ for (const width of [390, 1440]) test(`image results display original pixels and
   await first.getByRole('button', { name: '编辑图片', exact: true }).click()
   await send(page, '保留原图继续编辑', 2)
   expect(calls[1].referenceUrls).toEqual([imageReference(original, 'png')])
+  await first.locator('.creation-image').scrollIntoViewIfNeeded()
   await first.locator('.creation-image-preview').click()
   const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
   await expect(viewer).toBeVisible()
@@ -529,7 +530,7 @@ test('deleting the active legacy image preserves the restore-context boundary', 
   await expect(turns).toHaveCount(2)
   await expect(marker).toBeVisible()
   expect(await marker.evaluate(element => element.previousElementSibling?.getAttribute('data-task-id'))).toBe('legacy-2')
-  await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'succeeded', text: '接下来的文字回答', outputs: [] } }))
+  await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'succeeded', outputs: [{ text: '接下来的文字回答' }] } }))
   await page.getByRole('button', { name: '创作模式：图片生成', exact: true }).click()
   await page.getByRole('group', { name: '创作类型', exact: true }).getByRole('button', { name: '对话', exact: true }).click()
   await page.getByRole('textbox', { name: '消息', exact: true }).fill('继续文字对话')
@@ -851,7 +852,7 @@ test('model and group changes keep displayed history without attaching old image
   expect(errors).toEqual([])
 })
 
-test('compatible streamed responses still render previews when an async submission returns a stream', async ({ page }) => {
+test('compatible streamed image responses render previews and preserve the image request protocol', async ({ page }) => {
   const { image } = await fixture(page)
   await page.evaluate(base64 => {
     const original = window.fetch.bind(window)
@@ -878,7 +879,8 @@ test('compatible streamed responses still render previews when an async submissi
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toBeVisible()
   await expect(page.locator('.creation-image-preview img')).toBeVisible()
   await expect(page.getByRole('img', { name: '生成中的预览', exact: true })).toHaveCount(0)
-  expect(await page.evaluate(() => (window as any).__streamPrefer)).toBe('respond-async')
+  expect(await page.evaluate(() => (window as any).__streamPrefer)).toBeNull()
+  expect(await page.evaluate(() => (window as any).__streamInput.kind)).toBe('image')
   await expect(page.locator('.creation-turn')).toHaveCount(1)
 })
 

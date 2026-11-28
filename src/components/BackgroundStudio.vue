@@ -3,7 +3,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Grip, LoaderCircle, Minus, X } from '@lucide/vue'
-import { creation, initializeCreation, mediaSource, type CreationTask } from '../native-studio'
+import { creation, initializeCreation, readCreationImage, type CreationTask } from '../native-studio'
 import { errorMessage, session } from '../state'
 
 const route = useRoute(), router = useRouter()
@@ -44,10 +44,25 @@ watch(() => ({
       && (active(previous?.phases.get(id) || '') || phase === 'complete' && previous?.restoring.has(id))).map(([id]) => id)
     unread.value = [...new Set([...unread.value, ...settled])].filter(id => current.phases.has(id))
   }
+  // Recovery can finish before this async component mounts; consume this page's events once.
+  const recovered = [...creation.recoveredTaskIds].filter(id => current.phases.get(id) === 'complete' && !current.restoring.has(id))
+  if (current.owner && !current.studio) unread.value = [...new Set([...unread.value, ...recovered])]
+  for (const id of recovered) creation.recoveredTaskIds.delete(id)
 }, { immediate: true, flush: 'sync' })
 const tasks = computed(() => creation.tasks.filter(item => item.owner === session.user?.id && visible(item)
   && !creation.restoringTaskIds.has(item.id) && (active(item.phase) || unread.value.includes(item.id))))
 const task = computed(() => tasks.value.find(item => item.id === selectedId.value) || tasks.value[0])
+const preview = ref('')
+watch([() => session.user?.id, () => !hidden.value && !studioPage.value && task.value?.kind === 'image' && task.value.phase === 'complete' ? task.value.urls[0] : undefined], ([, url], _, cleanup) => {
+  preview.value = ''
+  if (!url) return
+  const controller = new AbortController()
+  let objectUrl = ''
+  cleanup(() => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); preview.value = '' })
+  void readCreationImage(url, controller.signal, true).then(blob => {
+    if (!controller.signal.aborted) preview.value = objectUrl = URL.createObjectURL(blob)
+  }).catch(() => { /* The result remains accessible from the task even if its preview fails. */ })
+}, { immediate: true })
 const index = computed(() => tasks.value.findIndex(item => item.id === task.value?.id))
 const running = computed(() => tasks.value.filter(item => active(item.phase)).length)
 const summary = computed(() => [running.value ? `${running.value} 项进行中` : '', tasks.value.length - running.value ? `${tasks.value.length - running.value} 项待查看` : ''].filter(Boolean).join(' · '))
@@ -122,7 +137,7 @@ onBeforeUnmount(() => { stopDrag(); observer.disconnect(); window.removeEventLis
     </div>
     <template v-if="!hidden">
       <div class="dock-content" role="status"><CheckCircle2 v-if="task.phase === 'complete'" :size="20" aria-hidden="true" /><LoaderCircle v-else-if="active(task.phase)" :size="20" aria-hidden="true" /><CircleAlert v-else :size="20" aria-hidden="true" /><div><strong>{{ labels[task.phase] }}<span v-if="progress !== undefined && task.phase === 'running'"> · {{ Math.round(progress) }}%</span></strong><p>{{ task.prompt || task.model }}</p><span class="caption-5 muted">{{ task.model }}</span></div></div>
-      <button v-if="task.kind === 'image' && task.phase === 'complete' && task.urls[0]" class="dock-preview" aria-label="打开生成结果" @click="open(task)"><img :src="mediaSource(task.urls[0], true)" alt="本次生成的图片" /></button>
+      <button v-if="preview" class="dock-preview" aria-label="打开生成结果" @click="open(task)"><img :src="preview" alt="本次生成的图片" decoding="async" /></button>
       <p v-if="error || task.error && !active(task.phase)" class="dock-error" :class="task.phase === 'paused' ? 'muted' : 'form-error'" :role="task.phase === 'paused' ? 'status' : 'alert'">{{ error || task.error }}</p>
       <p v-if="task.phase === 'error' || task.phase === 'attention'" class="dock-note caption-5 muted">{{ task.phase === 'attention' ? '尚未确认生成结果，可在工作台查询原任务。此提醒稍后自动关闭。' : '记录已保留在工作台，此提醒稍后自动关闭。' }}</p>
       <div class="dock-actions"><button class="button primary btn" @click="open(task)">{{ task.phase === 'complete' ? '查看结果' : '查看任务' }}<ArrowUpRight :size="15" /></button><template v-if="tasks.length > 1"><span class="dock-page caption-5 muted">第 {{ index + 1 }} / {{ tasks.length }} 项</span><button class="icon-button" aria-label="上一个任务" @click="selectedId = tasks[(index + tasks.length - 1) % tasks.length]!.id"><ChevronLeft :size="18" /></button><button class="icon-button" aria-label="下一个任务" @click="selectedId = tasks[(index + 1) % tasks.length]!.id"><ChevronRight :size="18" /></button></template></div>

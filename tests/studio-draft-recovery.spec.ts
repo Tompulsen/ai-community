@@ -108,6 +108,7 @@ for (const kind of ['text', 'image'] as const) {
   test(`a failed initial ${kind} conversation save offers a usable retry before accepting input`, async ({ page }) => {
     await fixture(page)
     if (kind === 'image') await page.goto('/create/image')
+    await expect(page.getByRole('textbox', { name: kind === 'text' ? '消息' : '提示词', exact: true })).toBeVisible()
     await page.evaluate(async () => {
       const resources = performance.getEntriesByType('resource').map(entry => entry.name)
       const chatPath = resources.find(name => /\/src\/native-chat\.ts(?:\?|$)/.test(name))!

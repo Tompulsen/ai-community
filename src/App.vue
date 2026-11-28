@@ -8,6 +8,7 @@ import MessageCenterDialog from './components/MessageCenterDialog.vue'
 import AnnouncementPopup from './components/AnnouncementPopup.vue'
 import WelfareReminder from './components/WelfareReminder.vue'
 import GooeyInput from './components/GooeyInput.vue'
+import BrowserStorageNotice from './components/BrowserStorageNotice.vue'
 import type { Work } from './data'
 import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, rememberReferralInvite, session, sessionStatus } from './state'
 import { inbox, loadInbox, type InboxCategory } from './inbox'
@@ -24,7 +25,7 @@ const publishOpen = computed(() => route.query.publish === '1')
 const editorRequested = computed<boolean>(previous => publishOpen.value || Boolean(previous))
 const guestAccount = computed(() => route.path === '/account' && !session.user)
 const accountSettings = computed(() => route.path === '/account' && !!session.user)
-const accountSettingDetail = computed(() => accountSettings.value && typeof route.query.tab === 'string' && ['privacy', 'following', 'theme', 'security', 'balance'].includes(route.query.tab))
+const accountSettingDetail = computed(() => accountSettings.value && typeof route.query.tab === 'string' && ['privacy', 'following', 'theme', 'security', 'balance', 'storage'].includes(route.query.tab))
 const studioPage = computed(() => route.path === '/create' || route.path.startsWith('/create/'))
 const communityShell = computed(() => !guestAccount.value && !studioPage.value)
 const wideViewport = ref(window.innerWidth >= 1000)
@@ -379,6 +380,7 @@ function restoreMessageTrigger() {
       <div id="mobile-discovery-filters" />
     </div>
     <p v-if="session.error && (!studioPage || !session.user)" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
+    <BrowserStorageNotice />
     <main id="main" tabindex="-1" :inert="session.restoring"><RouterView :key="route.path.startsWith('/account') ? route.path : `${studioPage ? '/create' : route.path}:${session.user?.id || 'guest'}`" /></main>
     <BackgroundStudio v-if="session.user" />
     <footer v-if="!guestAccount && !studioPage" class="app-footer"><span>{{ site.brand }}</span><RouterLink to="/messages?tab=announcement">公告</RouterLink></footer>
@@ -408,6 +410,7 @@ function restoreMessageTrigger() {
 @media (min-width: 1000px) {
   .studio-shell { --studio-sidebar-width: clamp(248px, 14.6vw, 420px); --studio-sidebar-surface: color-mix(in srgb, var(--canvas) 76%, var(--surface)); }
   .studio-shell > main { margin-left: var(--studio-sidebar-width); }
+  .studio-shell > .browser-storage-notice { margin-left: calc(var(--studio-sidebar-width) + 16px); }
   .studio-shell .header-inner { max-width: none; padding-left: calc(var(--studio-sidebar-width) + 32px); grid-template-columns: minmax(0, 1fr) auto; }
   .studio-shell .brand, .studio-shell .desktop-nav { display: none; }
   .studio-shell .header-tools { grid-column: 2; }

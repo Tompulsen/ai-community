@@ -1,0 +1,8 @@
+body { color-scheme: light; --ink: #182332; --muted: #566272; --border: #d5dce4; --surface: #fff; --surface-soft: #f4f6f9; --focus-ring: #3659b8; --danger: #a42628; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #f4f6f9; color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 16px; line-height: 1.65; }
+.storage-recovery-page { width: min(100%, 960px); min-height: 100vh; margin: 0 auto; padding: 32px max(20px, env(safe-area-inset-right)) 48px max(20px, env(safe-area-inset-left)); background: var(--surface); overflow-wrap: anywhere; }
+.storage-recovery-page > header { padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--border); }
+.storage-recovery-page h1 { margin: 4px 0 12px; font-size: clamp(24px, 5vw, 32px); line-height: 1.35; }
+.storage-recovery-page header p { margin: 8px 0; color: var(--muted); }.storage-recovery-page .recovery-brand { font-size: 14px; }
+@media (prefers-color-scheme: dark) { body { color-scheme: dark; --ink: #edf1f8; --muted: #adb9c9; --border: #485363; --surface: #1b2531; --surface-soft: #243141; --focus-ring: #9dbbff; --danger: #ffb4b4; background: #141c26; } }

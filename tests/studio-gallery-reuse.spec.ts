@@ -52,7 +52,7 @@ async function fixture(page: Page, count = 3, multi = false, failures = false, r
   await page.getByRole('button', { name: '作品库', exact: true }).click()
   const library = page.getByRole('dialog', { name: '作品库', exact: true })
   await expect(library).toBeVisible()
-  await expect(library.locator('.gallery-item')).toHaveCount(failures ? Math.max(0, count - 3) : Math.min(count, 60) + (multi ? 2 : 0))
+  await expect(library.locator('.gallery-item')).toHaveCount(failures ? Math.min(60, Math.max(0, count - 3)) : Math.min(count + (multi ? 2 : 0), 60))
   return { library, ...account, generation, media, pictures }
 }
 async function selectAll(library: Locator) {
@@ -87,9 +87,9 @@ test('old library layout has a fixed toolbar, a scrollable grid, narrow two-colu
   await expect(library.locator('.batch-toolbar')).toContainText('已选 72')
   await library.locator('.gallery-item .gallery-cover button').first().click()
   await expect(library.locator('.batch-toolbar')).toContainText('已选 73')
-  await library.getByRole('button', { name: '加载更多', exact: true }).click()
-  await expect(library.locator('.gallery-item')).toHaveCount(73)
-  await expect(library.locator('.gallery-item.selected')).toHaveCount(73)
+  await library.getByRole('button', { name: '下一页', exact: true }).click()
+  await expect(library.locator('.gallery-item')).toHaveCount(13)
+  await expect(library.locator('.gallery-item.selected')).toHaveCount(13)
   await library.getByRole('combobox', { name: '按模型筛选', exact: true }).selectOption('flux')
   await expect(library.locator('.gallery-item')).toHaveCount(36)
   await expect(library.locator('.gallery-item.selected')).toHaveCount(0)
@@ -194,6 +194,15 @@ for (const action of ['stop', 'switch account'] as const) {
     await expect(library.locator('.gallery-cover img')).toHaveCount(3)
     await expect.poll(() => library.locator('.gallery-cover img').evaluateAll(images => images.every(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true)
     await page.evaluate(() => {
+      const blob = Response.prototype.blob
+      Response.prototype.blob = function () {
+        const result = blob.call(this)
+        if (this.headers.get('content-type') === 'application/zip') {
+          Response.prototype.blob = blob
+          result.then(() => { (window as any).exportSettled = true }, () => { (window as any).exportSettled = true })
+        }
+        return result
+      }
       const stream = Blob.prototype.stream
       let originals = 0
       Blob.prototype.stream = function () {
@@ -227,6 +236,8 @@ for (const action of ['stop', 'switch account'] as const) {
         state.user.id = '17'; await setOwner(page, '17')
         await page.getByRole('button', { name: '作品库', exact: true }).click()
       }
+      await expect.poll(() => page.evaluate(() => Boolean((window as any).exportSettled))).toBe(true)
+      expect(downloads).toHaveLength(0)
     } finally { await page.evaluate(() => (window as any).releaseExport?.()) }
     await expect(library.locator('.gallery-item')).toHaveCount(3)
     await expect(library.locator('.gallery-export')).toHaveCount(0)
@@ -244,7 +255,10 @@ test('three selected originals download together after retrying a missing second
   await selectAll(library)
   await expect(library.locator('.gallery-stats')).toContainText('已选 3 件')
   await expect(library.getByRole('checkbox', { name: '选择当前页' })).toHaveCount(0)
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
+    const path = performance.getEntriesByType('resource').map(entry => entry.name).find(name => /\/src\/native-studio\.ts(?:\?|$)/.test(name))!
+    const { forgetCreationImage } = await import(/* @vite-ignore */ path)
+    forgetCreationImage('studio-asset:reuse-0:1')
     const get = IDBObjectStore.prototype.get
     IDBObjectStore.prototype.get = function (key) {
       if (this.name === 'originals' && Array.isArray(key) && key[1] === 'reuse-0:1') {
@@ -267,6 +281,56 @@ test('three selected originals download together after retrying a missing second
   expect([...entries.values()].map((file, index) => file.equals(pictures[index]!))).toEqual([true, true, true])
   expect(downloads).toHaveLength(1)
 })
+
+for (const boundary of ['combined files', 'ZIP headers', 'streamed bytes'] as const) {
+  test(`ZIP budget rejects oversized ${boundary} and preserves originals and selection for retry`, async ({ page }) => {
+    const { library, pictures, generation } = await fixture(page, 2)
+    const downloads: Download[] = []
+    page.on('download', download => downloads.push(download))
+    await expect(library.locator('.browser-save')).toHaveText(['图片已保存到此浏览器', '图片已保存到此浏览器'])
+    await expect.poll(() => library.locator('.gallery-cover img').evaluateAll(images => images.length === 2 && images.every(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true)
+    const before = await stored(page)
+    await selectAll(library)
+    await page.evaluate(boundary => {
+      const size = Object.getOwnPropertyDescriptor(Blob.prototype, 'size')!
+      const stream = Blob.prototype.stream
+      ;(window as any).restoreExportBudget = () => {
+        Object.defineProperty(Blob.prototype, 'size', size)
+        Blob.prototype.stream = stream
+      }
+      if (boundary === 'streamed bytes') {
+        Blob.prototype.stream = function () {
+          if (this.type !== 'image/jpeg') return stream.call(this)
+          Blob.prototype.stream = stream
+          // Report a large emitted chunk without allocating a large test buffer.
+          const chunk = new Uint8Array(1)
+          Object.defineProperty(chunk, 'byteLength', { value: 128 * 1024 * 1024 })
+          return new ReadableStream({ start(controller) { controller.enqueue(chunk); controller.close() } })
+        }
+      } else Object.defineProperty(Blob.prototype, 'size', {
+        ...size, get() { return this.type === 'image/jpeg' ? (boundary === 'ZIP headers' ? 128 : 80) * 1024 * 1024 : size.get!.call(this) },
+      })
+    }, boundary)
+    try {
+      await library.getByRole('button', { name: '导出所选', exact: true }).click()
+      await confirmImageDownload(page)
+      await expect(library.getByRole('alert')).toContainText('本次导出文件较大，请减少选择后分批导出。作品已保留。单次打包上限为 128 MiB。')
+      if (boundary !== 'streamed bytes') await expect(library.getByRole('alert')).toContainText(boundary === 'combined files' ? '第 2 项' : '第 1 项')
+      await expect(library.locator('.batch-toolbar')).toContainText('已选 2')
+      await expect(library.locator('.gallery-item')).toHaveCount(2)
+      expect(downloads).toHaveLength(0)
+    } finally { await page.evaluate(() => (window as any).restoreExportBudget()) }
+    expect(await stored(page)).toEqual(before)
+    const retry = page.waitForEvent('download')
+    await library.getByRole('button', { name: '重新导出', exact: true }).click()
+    await confirmImageDownload(page)
+    const entries = await readDownloadArchive(await retry)
+    expect([...entries.keys()]).toEqual([0, 1].map(index => expect.stringContaining(`creation-reuse-${index}-1.jpg`)))
+    expect([...entries.values()].every(file => file.equals(pictures[0]!))).toBe(true)
+    expect(downloads).toHaveLength(1)
+    expect(generation).toHaveLength(0)
+  })
+}
 
 test('failed-record cleanup preserves paused and attention tasks', async ({ page }) => {
   const { library, generation } = await fixture(page, 4, false, true)
@@ -376,8 +440,8 @@ test('relative-date pagination and select-all share one boundary while a new-day
     }
   })
   await page.clock.setFixedTime(new Date('2026-11-23T04:01:00Z'))
-  await library.getByRole('button', { name: '加载更多', exact: true }).click()
-  await expect(library.locator('.gallery-item')).toHaveCount(65)
+  await library.getByRole('button', { name: '下一页', exact: true }).click()
+  await expect(library.locator('.gallery-item')).toHaveCount(5)
   await expect(library.locator('.gallery-scroll')).toHaveAttribute('aria-busy', 'false')
   await expect(library.locator('.gallery-stats')).toContainText('65 条')
   expect(await page.evaluate(() => (window as any).relativeDateSummaryReads)).toBe(0)

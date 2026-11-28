@@ -28,7 +28,7 @@ beforeEach(() => {
     return task
   })
   mocks.api.mockReset().mockResolvedValue({ ok: true }); mocks.confirm.mockReturnValue(true)
-  vi.stubGlobal('window', { confirm: mocks.confirm })
+  vi.stubGlobal('window', Object.assign(new EventTarget(), { confirm: mocks.confirm }))
 })
 
 async function fixture() {

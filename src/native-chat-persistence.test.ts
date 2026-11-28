@@ -160,7 +160,7 @@ it('finishes a retired queue before a quick return reads the same account histor
   await Promise.all([first, last, loading])
   expect(storage.write).toHaveBeenCalledTimes(2)
   expect(storage.write.mock.calls[1]![1].state.sessions[0].draft).toBe('last')
-  expect(storage.read).toHaveBeenCalledWith('octopus:user-17:native-chat')
+  expect(storage.read).toHaveBeenCalledWith('octopus:user-17:native-chat', { deferAllSessionAssets: true })
   expect(p.chats.sessions[0]!.draft).toBe('last')
   expect(p.chats.activeId).toBe(p.chat.id)
 })
