@@ -46,7 +46,7 @@ let entryLive = true
 onBeforeUnmount(() => { entryLive = false; revision++; releaseInactiveChatAssets(''); sidebarMedia.removeEventListener('change', moveMenu) })
 const sidebar = ref<InstanceType<typeof StudioSidebar>>(), mobileGallery = ref<InstanceType<typeof StudioLibraryDialog>>()
 const pendingNew = ref(false)
-type MediaAction = 'editTask' | 'editImage' | 'regenerate' | 'useTask' | 'chooseReference'
+type MediaAction = 'continueTask'
 const workspace = ref<InstanceType<typeof StudioWorkspace>>(), chat = ref<InstanceType<typeof StudioChat>>()
 const remixReady = computed(() => !sourceLoading.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && !!chat.value?.ready && (kind.value === 'text' || !!workspace.value))
 const publisher = ref<InstanceType<typeof StudioPublishDialog>>()
@@ -302,15 +302,13 @@ function openConversation(id: string) {
   accountTool.value = ''
   void router.replace({ path: `/create/${mode}`, query: { ...(mode === 'text' ? {} : { conversation: id }), ...(selected.sourceWorkId ? { remix: selected.sourceWorkId } : {}) } })
 }
-async function mediaAction(action: MediaAction, task: CreationTask, index?: number) {
+async function mediaAction(action: MediaAction, task: CreationTask) {
   if (task.kind === 'text' || task.owner !== session.user?.id) return
   const owner = session.user?.id, activeId = chats.activeId
   await router.replace({ path: `/create/${task.kind}`, query: route.query })
   await nextTick()
   if (owner !== session.user?.id || activeId !== chats.activeId || kind.value !== task.kind || !workspace.value) return
-  if (action === 'chooseReference') workspace.value.chooseReference(task, index ?? 0)
-  else if (action === 'editImage') await workspace.value.editImage(task, index)
-  else await workspace.value[action](task)
+  await workspace.value[action](task)
 }
 async function undoConversation() {
   const owner = session.user?.id, activeId = chats.activeId

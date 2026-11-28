@@ -180,7 +180,7 @@ test('desktop sidebar restores media history without submitting and keeps accoun
   await page.screenshot({ path: '.taste-skill/studio-remove-titles-20261115/desktop.png' })
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeEmpty()
   await expect(page.locator('.creation-request')).toContainText('海边的灯塔')
-  await page.getByRole('button', { name: '编辑并重新生成', exact: true }).click()
+  await page.getByRole('button', { name: '继续创作', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('海边的灯塔')
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留这个创作草稿')
   await sidebar.getByRole('button', { name: '模型广场', exact: true }).click()

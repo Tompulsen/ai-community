@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
-import { ChevronLeft, ChevronRight, Copy, CopyPlus, Download, ImagePlus, Maximize, MessageSquareText, Pencil, RefreshCw, Square, Trash2 } from '@lucide/vue'
-import { copyCreationImage, creationRequestTimedOut, downloadCreation, downloadCreationSelection, mediaSource, resumeCreation, stopCreation, type CreationDestination, type CreationTask } from '../../native-studio'
+import { computed, onUnmounted, ref, useId, watch } from 'vue'
+import { ChevronLeft, ChevronRight, Copy, ImageUp, Maximize, MessageCircleReply, Pin, PinOff, RefreshCw, Square, Trash2 } from '@lucide/vue'
+import { copyCreationImage, creationRequestTimedOut, downloadCreationSelection, mediaSource, resumeCreation, stopCreation, type CreationDestination, type CreationTask } from '../../native-studio'
 import { chats, togglePinnedMessage, type NativeChat } from '../../native-chat'
 import { branchMessages } from '../../../shared/studio/chat-branches'
 import { confirmStudioDelete } from '../../studio-confirm'
@@ -21,7 +21,7 @@ import StudioMessageActions, { type MessageAction } from './StudioMessageActions
 
 const props = defineProps<{ task: CreationTask; conversation: NativeChat; role: 'user' | 'assistant' }>()
 const emit = defineEmits<{
-  action: [action: 'editTask' | 'editImage' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number]
+  action: [action: 'continueTask', task: CreationTask]
   publish: [task: CreationTask, destination: CreationDestination]
   preview: [task: CreationTask, index: number, editor?: boolean]
 }>()
@@ -34,6 +34,7 @@ function videoMetadata(url: string, event: Event) {
 }
 const busy = computed(() => isConversationBusy(props.conversation))
 const downloading = ref(false)
+const menuId = `media-menu-${useId()}`
 let downloadController: AbortController | undefined
 onUnmounted(() => downloadController?.abort())
 watch([() => session.user?.id, () => props.task.id], () => downloadController?.abort())
@@ -66,23 +67,32 @@ async function downloadAll() {
 }
 const actions = computed<MessageAction[]>(() => {
   const task = props.task, result = props.role === 'assistant'
-  const items: MessageAction[] = [
-    ...(task.kind === 'image' && (result || task.phase === 'complete' && task.urls.length) ? [{ icon: 'editImage' as const, label: result ? '编辑图片' : '编辑对应图片', hint: '将生成图片带入输入框编辑', disabled: busy.value || !task.urls.length, run: () => emit('action', 'editImage', task) }] : []),
-    { icon: 'edit', label: result ? '编辑原提问' : '编辑并重新生成', hint: '编辑对话：修改原提问和参考图', disabled: busy.value, run: () => emit('action', 'editTask', task) },
-    { icon: 'retry', label: result ? '重新生成此轮' : '重新发送提问', disabled: busy.value, run: () => emit('action', 'regenerate', task) },
-    { icon: 'delete', label: result ? '删除生成记录' : '删除此轮消息', hint: '删除本轮对话记录', disabled: busy.value, run: remove },
-    { icon: 'pin', label: pinned.value ? '取消固定' : '固定到上下文', hint: task.kind === 'video' ? '视频生成不使用对话上下文' : pinned.value ? '取消固定：后续不再保留此条上下文' : '固定到上下文：清除历史后仍可用于图片和对话', pressed: pinned.value, disabled: busy.value || task.kind === 'video' || !pinMessageId.value, run: pin },
+  if (!result) return [
+    ...(task.kind !== 'video' ? [{ icon: 'pin' as const, label: pinned.value ? '取消固定' : '固定到上下文', hint: pinned.value ? '取消固定此条提问' : '固定此条提问，不包含生成图片', pressed: pinned.value, disabled: busy.value || !pinMessageId.value, run: pin }] : []),
     { icon: 'copy', label: '复制提示词', run: copyPrompt },
   ]
-  if (result) items.push(
-    { icon: 'download', label: task.kind === 'video' ? '下载视频' : task.urls.length ? '下载图片' : '下载文本', hint: downloading.value ? '正在准备下载' : task.urls.length > 1 ? `下载全部 ${task.urls.length} 张图片` : undefined, disabled: downloading.value, run: downloadAll },
-    { icon: 'publish', label: '发布作品', run: () => emit('publish', task, 'community') },
-    { icon: 'comment', label: '发送到源作品评论区', hint: task.kind === 'video' ? '视频作品暂不支持发布至源作品评论区' : !task.sourceWorkId ? '从源作品制作同款后，可发布至其评论区' : '发布至源作品评论区', disabled: task.kind === 'video' || !task.sourceWorkId, run: () => emit('publish', task, 'source-comment') },
-  )
-  return items
+  return [
+    { icon: 'edit', label: '继续创作', hint: task.kind === 'image' ? '恢复原参数，生成图片作为可移除参考图；发送后追加新一轮' : '恢复原提问、参考素材和参数；发送后追加新一轮', disabled: busy.value, run: () => emit('action', 'continueTask', task) },
+    ...(task.phase === 'complete' ? [
+      { icon: 'download', label: task.kind === 'video' ? '下载视频' : task.urls.length ? '下载图片' : '下载文本', hint: downloading.value ? '正在准备下载' : task.urls.length > 1 ? `下载全部 ${task.urls.length} 张图片` : undefined, disabled: downloading.value, run: downloadAll },
+      { icon: 'publish', label: '发布作品', menuId: task.kind === 'image' && task.sourceWorkId ? `${menuId}-publish` : undefined, expanded: task.kind === 'image' && task.sourceWorkId ? publishMenu.value?.visible || false : undefined, run: openPublish },
+    ] satisfies MessageAction[] : []),
+    { icon: 'more', label: '更多', menuId, expanded: menu.value?.visible || false, run: openMore },
+  ]
 })
 const menu = ref<InstanceType<typeof StudioContextMenu>>()
+const publishMenu = ref<InstanceType<typeof StudioContextMenu>>()
 const menuIndex = ref(0)
+function openMore(event: MouseEvent) {
+  menuIndex.value = 0
+  if (menu.value?.visible) menu.value.close()
+  else void menu.value?.open(event)
+}
+function openPublish(event: MouseEvent) {
+  if (props.task.kind !== 'image' || !props.task.sourceWorkId) emit('publish', props.task, 'community')
+  else if (publishMenu.value?.visible) publishMenu.value.close()
+  else void publishMenu.value?.open(event)
+}
 function openMenu(event: MouseEvent) {
   const root = event.currentTarget as HTMLElement, figure = (event.target as Element).closest('figure')
   const index = figure ? [...root.querySelectorAll('.creation-media > figure')].indexOf(figure) : -1
@@ -91,22 +101,17 @@ function openMenu(event: MouseEvent) {
 }
 const menuItems = computed<StudioMenuAction[]>(() => {
   const task = props.task
-  const items: StudioMenuAction[] = props.role === 'user' ? [
-    { label: '复制提问', icon: Copy, run: copyPrompt },
-    { label: '编辑并重新生成', icon: Pencil, disabled: busy.value, run: () => emit('action', 'editTask', task) },
-  ] : [
-    ...(task.kind === 'image' && task.urls.length ? [{ label: '编辑这张图片', icon: ImagePlus, disabled: busy.value || task.phase !== 'complete', run: () => emit('action', 'editImage', task, menuIndex.value) }] : []),
-    { label: '编辑原提问', icon: MessageSquareText, disabled: busy.value, run: () => emit('action', 'editTask', task) },
-    ...(task.urls.length ? [{ label: task.kind === 'video' ? '放大视频' : '查看大图', icon: Maximize, run: () => emit('preview', task, menuIndex.value) },
-      { label: task.kind === 'video' ? '下载视频' : '下载图片', icon: Download, run: () => perform(() => downloadCreation(task, menuIndex.value)) }] : []),
-    ...(task.kind === 'image' && task.urls.length ? [{ label: '复制图片', icon: Copy, run: () => perform(async () => { await copyCreationImage(task, menuIndex.value); notify('图片已复制') }) }] : []),
-    { label: '重新生成此轮', icon: RefreshCw, disabled: busy.value, run: () => emit('action', 'regenerate', task) },
-    { label: '复制提示词', icon: Copy, run: copyPrompt },
-    { label: '复用参数', icon: CopyPlus, disabled: busy.value, run: () => emit('action', 'useTask', task) },
+  return [
+    ...(props.role === 'assistant' && task.kind === 'image' && task.urls.length ? [{ label: '复制图片', icon: Copy, run: () => perform(async () => { await copyCreationImage(task, menuIndex.value); notify('图片已复制') }) }] : []),
+    ...(task.kind !== 'video' ? [{ label: pinned.value ? '取消固定' : '固定到上下文', icon: pinned.value ? PinOff : Pin, disabled: busy.value || !pinMessageId.value, run: pin }] : []),
+    { label: '删除本轮对话', icon: Trash2, danger: true, disabled: busy.value, run: remove },
   ]
-  return [...items, { label: '删除此轮消息', icon: Trash2, danger: true, disabled: busy.value, run: remove }]
 })
-watch(() => [session.user?.id, props.conversation.id, props.task.id], () => menu.value?.close())
+const publishItems: StudioMenuAction[] = [
+  { label: '发布到社区', icon: ImageUp, run: () => emit('publish', props.task, 'community') },
+  { label: '发送到源作品评论区', icon: MessageCircleReply, run: () => emit('publish', props.task, 'source-comment') },
+]
+watch(() => [session.user?.id, props.conversation.id, props.task.id], () => { menu.value?.close(); publishMenu.value?.close() })
 const working = computed(() => ['submitting', 'running'].includes(props.task.phase))
 const insufficient = computed(() => !working.value && !!props.task.error && isInsufficientCredits(props.task))
 const timedOut = computed(() => creationRequestTimedOut(props.task))
@@ -142,7 +147,8 @@ function copyPrompt() {
 }
 async function remove() {
   const chat = props.conversation, task = props.task
-  if (busy.value || !await confirmStudioDelete('删除 1 轮对话记录？已保存到作品库的内容不会删除。', () => chats.activeId === chat.id && chats.sessions.includes(chat) && props.task === task && !busy.value)) return
+  const scope = task.kind === 'video' ? '删除本轮提问、视频回复及其备选版本？' : '删除本轮提问和对应图片回复？共用提问仍有其他图片时会保留。'
+  if (busy.value || !await confirmStudioDelete(`${scope}后续对话和已保存到作品库的内容不会删除。`, () => chats.activeId === chat.id && chats.sessions.includes(chat) && props.task === task && !busy.value)) return
   await perform(() => deleteMediaTurns(chat, [task.id]))
 }
 </script>
@@ -165,7 +171,6 @@ async function remove() {
     <template v-else>
       <StudioInsufficientCredits v-if="insufficient" />
       <p v-else-if="task.error && (!working || task.errorStage === '任务查询')" class="task-message" :class="{ muted: task.phase === 'paused' }">{{ task.error }}</p>
-      <div v-if="task.phase === 'error'" class="creation-recovery"><button class="button subtle btn" @click="emit('action', 'editTask', task)"><Pencil :size="15" />编辑后重试</button></div>
       <div v-if="canQuery" class="creation-recovery"><button class="button subtle btn" @click="perform(() => resumeCreation(task))"><RefreshCw :size="15" />查询原结果</button></div>
       <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview, true)" alt="生成中的预览" />
       <div v-if="task.urls.length" class="creation-media" :class="{ 'video-results': task.kind === 'video' }"><figure v-for="(url, index) in task.urls" :key="url" :style="task.kind === 'video' ? { '--video-ratio': (videoSizes[url]?.width || 640) / (videoSizes[url]?.height || 360) } : undefined">
@@ -177,11 +182,12 @@ async function remove() {
       </figure></div>
       <div v-else-if="task.text" class="creation-text"><pre>{{ task.text }}</pre></div>
       <StudioBrowserSave :task="task" />
-      <StudioMessageActions v-if="task.phase === 'complete'" class="creation-message-actions" label="生成结果操作" :actions="actions" />
+      <StudioMessageActions v-if="!working" class="creation-message-actions" label="生成结果操作" :actions="actions" />
       <div v-if="version.total > 1" class="creation-versions" role="group" aria-label="生成版本"><button class="icon-button" type="button" aria-label="上一个版本" title="上一个版本" :disabled="busy || version.index === 0" @click="perform(() => selectMediaVersion(conversation, task.id, -1))"><ChevronLeft :size="16" /></button><output aria-label="当前生成版本">{{ version.index + 1 }} / {{ version.total }}</output><button class="icon-button" type="button" aria-label="下一个版本" title="下一个版本" :disabled="busy || version.index >= version.total - 1" @click="perform(() => selectMediaVersion(conversation, task.id, 1))"><ChevronRight :size="16" /></button></div>
     </template>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-    <StudioContextMenu ref="menu" :items="menuItems" />
+    <StudioContextMenu :id="menuId" ref="menu" :items="menuItems" />
+    <StudioContextMenu :id="`${menuId}-publish`" ref="publishMenu" label="发布作品" :items="publishItems" />
   </StudioMessageFrame>
 </template>
 

@@ -7,7 +7,7 @@ export interface StudioMenuAction { label: string; text?: string; icon: Componen
 import { nextTick, onBeforeUnmount, ref } from 'vue'
 import { errorMessage, notify } from '../../state'
 import { addFallbackPopover, removeFallbackPopover, supportsNativePopover } from '../../studio-popover-fallback'
-const props = defineProps<{ items: StudioMenuAction[]; label?: string }>()
+const props = defineProps<{ items: StudioMenuAction[]; label?: string; id?: string }>()
 const panel = ref<HTMLElement>(), visible = ref(false)
 const mounted = ref(false)
 const portalTarget = ref<string | HTMLElement>('body')
@@ -50,9 +50,11 @@ async function open(event: MouseEvent) {
   await nextTick()
   if (request !== opening || !panel.value || (nativePopover ? !panel.value.matches(':popover-open') : !visible.value)) return
   const bounds = panel.value.getBoundingClientRect()
+  const trigger = event.type === 'click' ? origin.getBoundingClientRect() : undefined
+  const top = trigger ? trigger.bottom + bounds.height + 4 <= innerHeight - 8 ? trigger.bottom + 4 : trigger.top - bounds.height - 4 : event.clientY
   position.value = {
-    left: `${Math.max(8, Math.min(event.type === 'click' && event.detail === 0 ? origin.getBoundingClientRect().left : event.clientX, innerWidth - bounds.width - 8))}px`,
-    top: `${Math.max(8, Math.min(event.type === 'click' && event.detail === 0 ? origin.getBoundingClientRect().bottom : event.clientY, innerHeight - bounds.height - 8))}px`,
+    left: `${Math.max(8, Math.min(trigger ? trigger.left : event.clientX, innerWidth - bounds.width - 8))}px`,
+    top: `${Math.max(8, Math.min(top, innerHeight - bounds.height - 8))}px`,
   }
   await nextTick()
   if (request !== opening || !panel.value?.isConnected) return
@@ -61,7 +63,7 @@ async function open(event: MouseEvent) {
 }
 function keys(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); origin?.focus({ preventScroll: true }); return }
-  if (event.key === 'Tab') { close(); return }
+  if (event.key === 'Tab') { origin?.focus({ preventScroll: true }); close(); return }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
   event.preventDefault()
   const buttons = [...panel.value!.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
@@ -79,7 +81,7 @@ onBeforeUnmount(close)
 defineExpose({ open, close, visible })
 </script>
 <template>
-  <Teleport v-if="mounted" :to="portalTarget"><div ref="panel" :popover="nativePopover ? 'auto' : undefined" :hidden="!nativePopover && !visible" class="message-context-menu" :class="{ 'studio-popover-fallback': !nativePopover }" :style="position" role="menu" :aria-label="label || '消息操作'" @toggle="toggle" @keydown="keys">
+  <Teleport v-if="mounted" :to="portalTarget"><div :id="id" ref="panel" :popover="nativePopover ? 'auto' : undefined" :hidden="!nativePopover && !visible" class="message-context-menu" :class="{ 'studio-popover-fallback': !nativePopover }" :style="position" role="menu" :aria-label="label || '消息操作'" @toggle="toggle" @keydown="keys">
     <button v-for="item in props.items" :key="item.label" type="button" role="menuitem" :aria-label="item.label" :disabled="item.disabled" :class="{ danger: item.danger }" @click="select(item)"><component :is="item.icon" :size="16" aria-hidden="true" /><span>{{ item.text || item.label }}</span></button>
   </div></Teleport>
 </template>

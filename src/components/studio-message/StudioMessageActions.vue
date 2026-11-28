@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, useId } from 'vue'
-import { ImageUp, MessageCircleReply } from '@lucide/vue'
-import editImage from '../../assets/message-actions/rename.svg'
+import { Ellipsis, ImageUp, MessageCircleReply } from '@lucide/vue'
 import edit from '../../assets/message-actions/edit.svg'
 import retry from '../../assets/message-actions/reload.svg'
 import remove from '../../assets/message-actions/clear.svg'
@@ -10,14 +9,16 @@ import copy from '../../assets/message-actions/copy.svg'
 import download from '../../assets/message-actions/download.svg'
 import { supportsNativePopover } from '../../studio-popover-fallback'
 
-const icons = { editImage, edit, retry, delete: remove, pin, copy, download }
+const icons = { edit, retry, delete: remove, pin, copy, download }
 export interface MessageAction {
-  icon: keyof typeof icons | 'publish' | 'comment'
+  icon: keyof typeof icons | 'publish' | 'comment' | 'more'
   label: string
   hint?: string
   disabled?: boolean
   pressed?: boolean
-  run: () => unknown
+  expanded?: boolean
+  menuId?: string
+  run: (event: MouseEvent) => unknown
 }
 defineProps<{ label: string; actions: MessageAction[] }>()
 const id = `message-action-${useId()}`
@@ -77,7 +78,13 @@ function leave() {
 function keepOpen() { clearTimeout(hideTimer) }
 function activate(event: MouseEvent, action: MessageAction) {
   if (action.disabled) { void show(event, action); return }
-  close(); action.run()
+  close(); action.run(event)
+}
+function menuKey(event: KeyboardEvent, action: MessageAction) {
+  if (!action.menuId) return
+  event.preventDefault()
+  if (action.expanded) document.getElementById(action.menuId)?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+  else (event.currentTarget as HTMLButtonElement).click()
 }
 onBeforeUnmount(() => { close(); window.removeEventListener('pointermove', resumeHover) })
 </script>
@@ -86,10 +93,12 @@ onBeforeUnmount(() => { close(); window.removeEventListener('pointermove', resum
   <div class="studio-message-actions" role="group" :aria-label="label">
     <button v-for="action in actions" :key="action.icon" type="button" class="message-action" :class="{ 'is-danger': action.icon === 'delete' }"
       :data-action="action.icon" :aria-label="action.label" :title="nativePopover ? undefined : action.hint || action.label" :aria-pressed="action.pressed" :aria-disabled="action.disabled || undefined"
+      :aria-haspopup="action.menuId ? 'menu' : undefined" :aria-expanded="action.expanded" :aria-controls="action.menuId"
       :aria-describedby="described === action.icon ? id : undefined" @pointerenter="show($event, action)" @pointerleave="leave"
-      @focus="show($event, action)" @blur="close" @click="activate($event, action)">
+      @focus="show($event, action)" @blur="close" @click="activate($event, action)" @keydown.down="menuKey($event, action)">
       <ImageUp v-if="action.icon === 'publish'" :size="16" :stroke-width="1.8" aria-hidden="true" />
       <MessageCircleReply v-else-if="action.icon === 'comment'" :size="16" :stroke-width="1.8" aria-hidden="true" />
+      <Ellipsis v-else-if="action.icon === 'more'" :size="16" :stroke-width="1.8" aria-hidden="true" />
       <span v-else class="message-action-icon" :style="{ maskImage: `url(&quot;${icons[action.icon]}&quot;)` }" aria-hidden="true" />
     </button>
     <Teleport :to="portal"><div v-if="tip" :id="id" ref="tooltip" popover="manual" role="tooltip" class="message-action-tooltip" @pointerenter="keepOpen" @pointerleave="leave">{{ tip }}</div></Teleport>

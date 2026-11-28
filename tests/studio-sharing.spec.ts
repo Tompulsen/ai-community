@@ -5,6 +5,15 @@ import AxeBuilder from '@axe-core/playwright'
 import { fillAccountLogin, mockUnifiedAccount } from './helpers/account-fixture'
 import type { Work } from '../src/data'
 
+async function publishTo(page: Page, destination: 'community' | 'source-comment') {
+  const direct = page.getByRole('button', { name: '发送到源作品评论区', exact: true })
+  if (destination === 'source-comment' && await direct.count()) return direct.click()
+  const button = page.getByRole('button', { name: '发布作品', exact: true })
+  const menu = await button.getAttribute('aria-haspopup') === 'menu'
+  await button.click()
+  if (menu) await page.getByRole('menuitem', { name: destination === 'community' ? '发布到社区' : '发送到源作品评论区', exact: true }).click()
+}
+
 async function openGroupPicker(page: Page) {
   await page.getByRole('combobox', { name: '模型', exact: true }).click()
   return page.getByRole('dialog', { name: '选择模型', exact: true })
@@ -112,7 +121,7 @@ test('remix starts with the prompt only, keeps selected and uploaded references,
   await expect(page.locator('.task-status')).toContainText('生成完成')
   expect(state.generated).toHaveLength(1)
   expect(state.generated[0]).toMatchObject({ sourceWorkId: 'source42', model: 'fixture-image', referenceUrls: ['/legacy-files/authorRef1', 'data:' + 'image/jpeg;base64,' + state.photo.toString('base64')] })
-  await page.getByRole('button', { name: '发送到源作品评论区', exact: true }).click()
+  await publishTo(page, 'source-comment')
   await page.getByRole('textbox', { name: '评论内容', exact: true }).fill('我的海底城市同款')
   await page.screenshot({ path: '.impeccable/review/studio-mobile/source-comment-390.png', fullPage: true })
   expect((await new AxeBuilder({ page }).include('.studio-publish-dialog').analyze()).violations).toEqual([])
@@ -122,12 +131,12 @@ test('remix starts with the prompt only, keeps selected and uploaded references,
   await page.getByRole('button', { name: '关闭发布作品', exact: true }).click()
   const comment = [...state.saved.values()][0].work
   comment.status = 'rejected'; comment.noteId = null
-  await page.getByRole('button', { name: '发送到源作品评论区', exact: true }).click()
+  await publishTo(page, 'source-comment')
   await expect(page.getByRole('dialog').getByRole('status')).toHaveText('未通过审核或已撤回，请查看提交记录。')
   await expect(page.getByRole('link', { name: '查看源作品评论', exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: '查看提交', exact: true })).toHaveAttribute('href', `/work/${comment.id}`)
   await page.getByRole('button', { name: '关闭发布作品', exact: true }).click()
-  await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await publishTo(page, 'community')
   await completePublicationFields(page)
   await page.getByRole('button', { name: '立即公开作品', exact: true }).click()
   await expect(page.getByRole('link', { name: '查看提交', exact: true })).toBeVisible()
@@ -137,20 +146,20 @@ test('remix starts with the prompt only, keeps selected and uploaded references,
   expect(state.saved.size).toBe(2)
 })
 
-test('the two community toolbar icons publish an image to each destination once', async ({ page }) => {
+test('one publish action offers both destinations and publishes to each once', async ({ page }) => {
   const state = await fixture(page)
   await page.goto('/create/image?remix=source42')
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.prompt)
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
   const toolbar = page.getByRole('group', { name: '生成结果操作', exact: true })
-  await expect(toolbar.getByRole('button')).toHaveCount(9)
-  await toolbar.getByRole('button', { name: '发送到源作品评论区', exact: true }).click()
+  await expect(toolbar.getByRole('button')).toHaveCount(4)
+  await publishTo(page, 'source-comment')
   await page.getByRole('textbox', { name: '评论内容', exact: true }).fill('我的同款作品')
   await page.getByRole('button', { name: '发布评论', exact: true }).click()
   await expect(page.getByRole('link', { name: '查看源作品评论', exact: true })).toHaveAttribute('href', '/work/source42#comment-note1')
   await page.getByRole('button', { name: '关闭发布作品', exact: true }).click()
-  await toolbar.getByRole('button', { name: '发布作品', exact: true }).click()
+  await publishTo(page, 'community')
   await completePublicationFields(page)
   await page.getByRole('button', { name: '立即公开作品', exact: true }).click()
   await expect(page.getByRole('link', { name: '查看提交', exact: true })).toBeVisible()
@@ -166,12 +175,12 @@ test('a lost publish response can be retried after reload with identical attachm
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
   state.loseNextResponse()
-  await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await publishTo(page, 'community')
   await completePublicationFields(page)
   await page.getByRole('button', { name: '立即公开作品', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('alert')).toContainText('连接中断')
   await page.reload()
-  await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await publishTo(page, 'community')
   await expect(page.getByRole('textbox', { name: '作品标题', exact: true })).toBeDisabled()
   await completePublicationFields(page)
   await page.getByRole('button', { name: '立即公开作品', exact: true }).click()
@@ -279,7 +288,7 @@ test('video remix opens the video workspace and only offers community publicatio
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
   await expect(page.getByRole('button', { name: '发布作品', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '发送到源作品评论区', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '发送到源作品评论区', exact: true })).toHaveCount(0)
   expect(state.generated[0]).toMatchObject({ kind: 'video', model: 'fixture-video', referenceUrls: [] })
 })
 
@@ -297,7 +306,7 @@ test('text remix keeps source attribution and selected images when sharing only 
   await expect(page.locator('.chat-composer .reference-list li')).toHaveCount(1)
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.locator('.chat-message.assistant .message-content')).toContainText('水母点亮')
-  await page.getByRole('button', { name: '发送到源作品评论区', exact: true }).click()
+  await publishTo(page, 'source-comment')
   await page.getByRole('button', { name: '发布评论', exact: true }).click()
   await expect(page.getByRole('link', { name: '查看源作品评论', exact: true })).toBeVisible()
   expect(state.generated[0]).toMatchObject({ sourceWorkId: 'source42', kind: 'text' })
@@ -312,7 +321,7 @@ test('unavailable source errors remain visible without claiming that a comment w
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
   state.hideSource()
-  await page.getByRole('button', { name: '发送到源作品评论区', exact: true }).click()
+  await publishTo(page, 'source-comment')
   await page.getByRole('button', { name: '发布评论', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('alert')).toContainText('源作品已不可访问')
   await expect(page.getByRole('link', { name: '查看源作品评论', exact: true })).toHaveCount(0)
@@ -329,7 +338,7 @@ test('switching accounts during result upload cannot publish under the new ident
   let release!: () => void, uploading = false
   const pending = new Promise<void>(resolve => { release = resolve })
   await page.route('**/api/uploads', async route => { uploading = true; await pending; await route.fulfill({ json: { file: { id: 'upload1', name: 'result.jpg', type: 'image/jpeg', url: '/legacy-files/upload1' } } }).catch(() => {}) })
-  await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await publishTo(page, 'community')
   await completePublicationFields(page)
   await page.getByRole('button', { name: '立即公开作品', exact: true }).click()
   try {
@@ -407,7 +416,7 @@ test('video remix restores duration, size, seed and advanced parameters without 
   await page.goto('/create/video?remix=source42')
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.prompt)
   await page.getByRole('button', { name: '高级参数', exact: true }).click()
-  await expect(page.getByRole('slider', { name: '视频时长', exact: true })).toHaveAttribute('aria-valuetext', '8 秒')
+  await expect(page.getByRole('spinbutton', { name: '时长（秒）', exact: true })).toHaveValue('8')
   await page.locator('.parameter-advanced > summary').click()
   await expect(page.getByLabel('尺寸', { exact: true })).toHaveValue('720x1280')
   await expect(page.getByRole('dialog', { name: '高级参数', exact: true }).getByLabel('随机种子', { exact: true })).toHaveValue('42')
@@ -465,8 +474,7 @@ test('reusing an automatically sized image keeps automatic sizing in its next re
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('一只猫')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
-  await page.locator('.creation-response').first().click({ button: 'right' })
-  await page.getByRole('menuitem', { name: '复用参数', exact: true }).click()
+  await page.locator('.creation-response').first().getByRole('button', { name: '继续创作', exact: true }).click()
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect.poll(() => state.generated.length).toBe(2)
   expect(state.generated[0].exactSize).not.toBe(true)

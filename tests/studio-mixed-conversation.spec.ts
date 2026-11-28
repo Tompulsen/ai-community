@@ -85,7 +85,7 @@ test('mode switches preserve conversation, transcript and independent drafts wit
   expect(await snapshot(page)).toEqual(before)
   await mode(page, 'text')
   await expect(page.locator('.generation-speed')).toHaveCount(0)
-  await expect(page.getByText(/tok\/s/)).toHaveCount(0)
+  await expect(page.getByRole('group', { name: '对话输出统计', exact: true }).getByRole('button', { name: '输出速度：— tok/s', exact: true })).toBeVisible()
 })
 
 test('text, images and video append in order to one conversation and survive reload', async ({ page }) => {
@@ -149,8 +149,7 @@ test('reused image parameters remain intact after changing modes', async ({ page
   await page.keyboard.press('Escape')
   await send(page, 'image', '复用完整参数')
   await mode(page, 'text')
-  await page.locator('.creation-response').first().click({ button: 'right' })
-  await page.getByRole('menuitem', { name: '复用参数', exact: true }).click()
+  await page.locator('.creation-response').first().getByRole('button', { name: '继续创作', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('复用完整参数')
   await mode(page, 'video'); await mode(page, 'image')
   await page.getByRole('button', { name: '高级参数', exact: true }).click()

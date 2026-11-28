@@ -539,38 +539,14 @@ async function useTask(task: CreationTask, generatedImages?: string[]) {
   } catch (cause) { if (live && scope === draftScope()) error.value = errorMessage(cause); return false }
   finally { restoringTask.value = false }
 }
-async function editTask(task: CreationTask) {
-  if (busy.value || submitting.value) return
-  if (await useTask(task)) {
-    branchTaskId.value = task.id; editing.value = true
-    void nextTick(() => promptInput.value?.focus())
-  }
-}
-async function editImage(task: CreationTask, index?: number) {
-  if (busy.value || submitting.value || task.owner !== session.user?.id || task.kind !== 'image' || task.phase !== 'complete') return
-  if (index !== undefined && (!Number.isInteger(index) || index < 0 || index >= task.urls.length)) return
-  const images = [...new Set(index === undefined ? task.urls : [task.urls[index]!])]
-  if (!images.length) return
-  if (images.length > 16) { error.value = '最多编辑 16 张参考图，请从图片右键菜单选择单张图片。'; return }
-  await useTask(task, images)
-}
-async function regenerate(task: CreationTask) {
-  if (busy.value || submitting.value || !await useTask(task)) return
-  const scope = draftScope()
-  branchTaskId.value = task.id; editing.value = false
-  await nextTick()
-  if (!live || scope !== draftScope()) return
-  await generate()
+async function continueTask(task: CreationTask) {
+  if (busy.value || submitting.value || task.owner !== session.user?.id) return
+  const images = task.kind === 'image' && task.phase === 'complete' ? [...new Set(task.urls)] : []
+  if (images.length > 16) { error.value = '最多使用 16 张参考图，请从作品库选择需要继续创作的图片。'; return }
+  await useTask(task, images.length ? images : undefined)
 }
 function cancelEditing() {
   branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false; prompt.value = ''; references.value = []; error.value = ''
-}
-function chooseReference(task: CreationTask, index: number) {
-  if (task.owner !== session.user?.id || task.kind !== 'image' || task.phase !== 'complete') return
-  const url = task.urls[index]
-  if (!url) return
-  references.value = [{ name: `历史生成图 ${index + 1}`, url }]
-  void nextTick(() => promptInput.value?.focus())
 }
 async function clearContext() {
   if (!currentConversation.value) return
@@ -593,7 +569,7 @@ function openConversation() {
   blank.value = false
   loadDraft()
 }
-defineExpose({ submitCanvas: (draft: CanvasEditDraft, options: CanvasSubmitOptions) => submit(options.onRegistered, draft, options), newCreation, useTask, editTask, editImage, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext, generateBackground: submit, submissionIssue, restoringParameters, canGenerate })
+defineExpose({ submitCanvas: (draft: CanvasEditDraft, options: CanvasSubmitOptions) => submit(options.onRegistered, draft, options), newCreation, useTask, continueTask, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext, generateBackground: submit, submissionIssue, restoringParameters, canGenerate })
 </script>
 
 <template>
@@ -601,7 +577,7 @@ defineExpose({ submitCanvas: (draft: CanvasEditDraft, options: CanvasSubmitOptio
     <div v-if="!entryOnly" class="studio-context-tools"><StudioModePicker v-if="!entryOnly" /><button v-if="!entryOnly" type="button" class="studio-tool" title="清除上下文" :disabled="!currentConversation?.messages.length || busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button><StudioSkillPicker :chat="skillChat" :kind="kind" :transient="entryOnly" :disabled="!composerReady || submitting || !!busy" /></div>
     <p v-if="creation.modelLaunchPending" class="muted" role="status">正在准备所选模型，请稍候…</p>
     <form class="creation-controls studio-composer" :aria-label="entryOnly ? '快捷创作' : '创作参数'" :inert="!composerReady || Boolean(creation.modelLaunchPending) || undefined" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
-      <div v-if="branchTaskId || imageEditTaskId" class="creation-editing" role="status"><Pencil :size="14" aria-hidden="true" /><span>{{ imageEditTaskId ? '编辑图片 · 修改提示词后生成新图片' : editing ? kind === 'image' ? '修改提示词 · 发送后追加新图片' : '编辑原提问 · 生成后保留旧版本' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" aria-hidden="true" /></button></div>
+      <div v-if="branchTaskId || imageEditTaskId" class="creation-editing" role="status"><Pencil :size="14" aria-hidden="true" /><span>{{ imageEditTaskId ? '继续创作 · 发送后追加新一轮' : editing ? kind === 'image' ? '修改提示词 · 发送后追加新图片' : '编辑原提问 · 生成后保留旧版本' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" aria-hidden="true" /></button></div>
       <StudioReferenceAttachments v-if="references.length" :references="references" :compact="kind === 'video'" :source-video="sourceVideoOperation" @remove="removeReference" @duration="sourceDuration" />
       <StudioMaterialStatus :items="materialIssues" @remove="materials.remove" @retry="retryMaterials" @cancel="materials.cancel" />
       <label class="field prompt-field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '提示词' }}</span><StudioVideoPrompt v-if="kind === 'video' && !sourceVideoOperation" ref="promptInput" v-model="prompt" :label="entryOnly ? '创作描述' : '提示词'" :references="imageReferences" :disabled="!composerReady" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" :disabled="!composerReady" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="sourceVideoOperation ? '视频处理说明（可选）' : entryOnly ? '描述你想生成的图片…' : '发消息，描述你的想法…'" :required="!sourceVideoOperation" @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
